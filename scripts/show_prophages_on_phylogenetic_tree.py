@@ -16,39 +16,6 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"  # Ensure Qt offscreen rendering
 def read_tree(tree_file: Path) -> Tree:
     return Tree(str(tree_file), format=1)
 
-def plot_prophages(df: pd.DataFrame, output_file: str):
-    """
-    Plot prophage coordinates per genome using matplotlib.
-
-    df must have: 'genome', 'contig_id', 'start', 'end', 'contig_length'
-    """
-    df = df.copy()
-    df["genome"] = df["contig_id"].str.split("|").str[0]
-    df["length"] = df["end"].astype(int) - df["start"].astype(int)
-    df["start"] = df["start"].astype(int)
-    df["end"] = df["end"].astype(int)
-    df["contig_length"] = df["contig_length"].astype(int)
-
-    fig, ax = plt.subplots(figsize=(10, 0.4 * len(df["genome"].unique())))
-
-    y_ticks = []
-    y_labels = []
-    for i, (genome, group) in enumerate(df.groupby("genome")):
-        y_ticks.append(i)
-        y_labels.append(genome)
-
-        for _, row in group.iterrows():
-            ax.hlines(y=i, xmin=0, xmax=row["contig_length"], color="lightgray", linewidth=6)
-            ax.hlines(y=i, xmin=row["start"], xmax=row["end"], color="red", linewidth=6)
-
-    ax.set_yticks(y_ticks)
-    ax.set_yticklabels(y_labels)
-    ax.set_xlabel("Genomic position")
-    ax.set_title("Prophage positions in contigs")
-    plt.tight_layout()
-    plt.savefig(output_file)
-    plt.close()
-
 def plot_prophage_positions(
     tree: Tree,
     prophage_dict: Dict[str, Dict[str, str]],
@@ -92,11 +59,33 @@ def plot_prophage_positions(
         ax.broken_barh([(start, end - start)], (i - 0.4, 0.8), facecolors='red')
 
         # Family color box (right side)
-        family = leaf_to_family.get(prophage_id)
+        # family = leaf_to_family.get(prophage_id)
+
+        # Find the leaf name that starts with this prophage_id to get family color
+        # genome_id = prophage_id.split("|")[0]
+        # matching_leaf = next((leaf for leaf in leaf_to_family if leaf.startswith(genome_id)), None)
+
+        print("=== leaf_to_family keys ===")
+        for leaf in list(leaf_to_family)[:5]:  # show a few examples
+            print(leaf)
+        print("===========================")
+
+        prophage_genome_id = prophage_id.split("|")[0]
+
+        # Try exact match first
+        matching_leaf = next((leaf for leaf in leaf_to_family if prophage_genome_id in leaf), None)
+
+        if not matching_leaf:
+            print(f"[WARN] Could not find matching leaf for {prophage_genome_id}")
+
+        family = leaf_to_family.get(matching_leaf)
+
+        print(f'{genome_id=}\t{matching_leaf=}\t{family=}')
         if family:
             color = family_to_color.get(family, "#999999")
             # Draw a small colored bar at the far right
             ax.broken_barh([(contig_length + 1000, 50000)], (i - 0.3, 0.6), facecolors=color)
+            # print(f'{genome_id=}\t{matching_leaf=}\t{family=}')
 
     ax.set_yticks(y_positions)
     ax.set_yticklabels(y_labels, fontsize=6)
@@ -197,42 +186,6 @@ def annotate_tree_features(
             print(f"[MATCHED] {leaf.name} ← {matched_prophage['prophage_id']}")
 
     print(f"[INFO] Matched {matched} prophage leaves out of {len(tree.get_leaves())}")
-
-
-# class ProphageBarFace(Face):
-#     def __init__(self, contig_len: int, start: int, end: int, width: int = 100, height: int = 10):
-#         Face.__init__(self)
-#         self.contig_len = contig_len
-#         self.start = start
-#         self.end = end
-#         self.width = width
-#         self.height = height
-#         self.margin_left = 2
-#         self.margin_right = 2
-#         self.margin_top = 2
-#         self.margin_bottom = 2
-
-#     def update_pixels(self, node):
-#         from PyQt5.QtGui import QPainter, QColor
-#         self.image = self._get_image(self.width, self.height)
-#         qp = QPainter(self.image)
-#         qp.setRenderHint(QPainter.Antialiasing)
-
-#         # Draw black background (full contig)
-#         qp.setBrush(QColor("black"))
-#         qp.drawRect(0, 0, self.width, self.height)
-
-#         # Draw red region (prophage)
-#         rel_start = int((self.start / self.contig_len) * self.width)
-#         rel_end = int((self.end / self.contig_len) * self.width)
-#         width = max(1, rel_end - rel_start)
-
-#         qp.setBrush(QColor("red"))
-#         qp.drawRect(rel_start, 0, width, self.height)
-
-#         print(f"[DEBUG] Rendering prophage bar | start: {self.start}, end: {self.end}, contig_len: {self.contig_len}")
-
-#         qp.end()
 
 class ProphageBarFace(Face):
     def __init__(self, contig_len: int, start: int, end: int, width: int = 100, height: int = 10):
