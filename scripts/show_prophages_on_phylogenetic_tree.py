@@ -6,9 +6,12 @@ from pathlib import Path
 from typing import Dict, Tuple, List, Set, Optional
 from ete3 import Tree, TreeStyle, NodeStyle, RectFace, faces, TextFace, Face
 import matplotlib
+from matplotlib.axes import Axes
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import pandas as pd
+
+from dna_features_viewer import GraphicFeature, GraphicRecord
 
 import textwrap
 
@@ -18,6 +21,60 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"  # Ensure Qt offscreen rendering
 
 def read_tree(tree_file: Path) -> Tree:
     return Tree(str(tree_file), format=1)
+
+def load_functional_annotation(path: str) -> Dict[str, List[GraphicFeature]]:
+    import pandas as pd
+    df = pd.read_csv(path, sep="\t")
+    features_by_genome = {}
+
+    def get_color(label):
+        allowed = {
+            "gene86", "PDDEXK_a", "TerL", "portal", "gene77", "MCP", "gene75",
+            "gene74", "gene73", "IHF_54", "IHF_53", "Ttub", "Tstab", "gene49",
+            "primase", "SNF2", "PolB", "PolA", "SF1", "PDDEXK_b", "ATP_43b", "DnaB helicase"
+        }
+        return "red" if label in allowed else "gray"
+
+    for _, row in df.iterrows():
+        genome = row["genome"]
+        start = int(row["start"])
+        end = int(row["end"])
+        strand = 1 if row["strand"] == "+" else -1
+        raw_label = row.get("yutin", "")
+        label = str(raw_label) if pd.notna(raw_label) and str(raw_label).strip() else None
+        color = get_color(label)
+
+        feature = GraphicFeature(start=start, end=end, strand=strand, color=color, label=label)
+        features_by_genome.setdefault(genome, []).append(feature)
+
+    return features_by_genome
+
+def plot_genomic_maps_on_subplot(
+    ax: Axes,
+    y_positions: List[int],
+    prophage_ids: List[str],
+    feature_dict: Dict[str, List[GraphicFeature]],
+    height: float = 0.8
+) -> None:
+    matched = 0
+    for y, prophage_id in zip(y_positions, prophage_ids):
+        features = feature_dict.get(prophage_id)
+        if not features:
+            continue
+        matched += 1
+        sequence_length = max(f.end for f in features) + 100
+        record = GraphicRecord(sequence_length=sequence_length, features=features)
+        record.plot(ax=ax, with_ruler=False, strand_in_label_threshold=7)
+
+    ax.set_xlim(0, 100000)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title("Genomic map", fontsize=10)
+    ax.invert_yaxis()
+
+    if matched == 0:
+        print("⚠️ No genomic maps were drawn. Check if feature_dict keys match the prophage IDs.")
+
 
 def build_leaf_metadata(tree: Tree) -> Tuple[Dict[str, Dict[str, str]], Dict[str, str], Dict[str, str]]:
     metadata = {}
@@ -83,7 +140,35 @@ def propagate_family_annotations_by_mrca(
         for leaf in mrca_leaves:
             if leaf_to_family.get(leaf.name) is None:
                 leaf_to_family[leaf.name] = family
-                print(f"[INFO] Propagated {family} to {leaf.name}")
+                # print(f"[INFO] Propagated {family} to {leaf.name}")
+
+def compare_genomes_between_prophage_and_functional_tables(
+    prophage_df: pd.DataFrame,
+    functional_df: pd.DataFrame
+) -> None:
+    """
+    Compare genome names between prophage summary table and functional annotation table.
+    """
+    prophage_genomes = set(prophage_df["prophage_id"].unique())
+    functional_genomes = set(functional_df["genome"].unique())
+
+    # Direct matches
+    common = prophage_genomes & functional_genomes
+    missing = prophage_genomes - functional_genomes
+
+    print("🧬 Prophage table:")
+    print(f"  Total prophage_id entries: {len(prophage_genomes)}")
+    print("🔬 Functional annotation table:")
+    print(f"  Total genome entries: {len(functional_genomes)}")
+    print("📊 Match summary:")
+    print(f"  ✅ Matched entries: {len(common)}")
+    print(f"  ❌ Missing in functional table: {len(missing)}")
+
+    if missing:
+        print("⚠️ Missing entries:")
+        for m in sorted(missing):
+            print(f"   - {m}")
+
 
 def merge_prophage_with_taxonomy(
     prophage_df: pd.DataFrame,
@@ -106,7 +191,8 @@ def plot_prophage_positions(
     leaf_to_family: Dict[str, str],
     family_to_color: Dict[str, str],
     taxonomy_df: pd.DataFrame,
-    output_file: str
+    output_file: str,
+    feature_dict: Optional[Dict[str, List[GraphicFeature]]] = None
 ) -> None:
     from collections import OrderedDict
 
@@ -135,15 +221,27 @@ def plot_prophage_positions(
         # print(f"[TAXONOMY] {contig_id} → {taxonomy}")
 
     n = len(ordered_prophage_dict)
+    # fig = plt.figure(figsize=(20, n * 0.4))
+
     fig = plt.figure(figsize=(20, n * 0.4))
-    gs = fig.add_gridspec(1, 3, width_ratios=[10, 1, 12])
+    gs = fig.add_gridspec(n, 4, width_ratios=[10, 1, 12, 15], wspace=0.05)
+
+    # One row per genome, same height for all
+    axes_barplot = [fig.add_subplot(gs[i, 0]) for i in range(n)]
+    axes_family  = [fig.add_subplot(gs[i, 1], sharey=axes_barplot[i]) for i in range(n)]
+    axes_tax     = [fig.add_subplot(gs[i, 2], sharey=axes_barplot[i]) for i in range(n)]
+    axes_genemap = [fig.add_subplot(gs[i, 3], sharey=axes_barplot[i]) for i in range(n)]
+    # gs = fig.add_gridspec(1, 3, width_ratios=[10, 1, 12])
+
+    gs = fig.add_gridspec(1, 4, width_ratios=[10, 1, 12, 15])
 
     ax1 = fig.add_subplot(gs[0, 0])
     ax2 = fig.add_subplot(gs[0, 1], sharey=ax1)
     ax3 = fig.add_subplot(gs[0, 2], sharey=ax1)
+    ax4 = fig.add_subplot(gs[0, 3], sharey=ax1)
 
-    plt.setp(ax2.get_yticklabels(), visible=False)
-    plt.setp(ax3.get_yticklabels(), visible=False)
+    ax2.tick_params(labelleft=False)
+    ax3.tick_params(labelleft=False)
 
     y_labels = []
     y_positions = list(range(n))
@@ -154,9 +252,18 @@ def plot_prophage_positions(
         contig_length = int(prophage_info["contig_length"])
         prophage_id = prophage_info["prophage_id"]
 
-        matching_leaf = leaf_metadata.get(prophage_id, {}).get("protein_id", None)
-        label = f"{contig_id}\n{matching_leaf}" if matching_leaf else contig_id
-        y_labels.append(label)
+        # Get matching leaf (if it exists)
+        matching_leaf = leaf_metadata.get(prophage_id, {}).get("protein_id")
+
+        # Build label: show both prophage_id and matching_leaf or contig_id
+        if matching_leaf:
+            base_label = f"{contig_id}\n{matching_leaf}"
+        else:
+            base_label = contig_id
+
+        full_label = f"{prophage_id} && {base_label}"
+        y_labels.append(full_label)
+
 
         ax1.broken_barh([(0, contig_length)], (i - 0.4, 0.8), facecolors='lightgrey')
         ax1.broken_barh([(start, end - start)], (i - 0.4, 0.8), facecolors='red')
@@ -177,8 +284,16 @@ def plot_prophage_positions(
 
     # Axis settings
     ax1.set_yticks(y_positions)
-    ax1.set_yticklabels(y_labels, fontsize=8)
-    ax1.set_xlabel("Genomic position")
+    ax1.set_yticklabels([])  # Hide default labels
+
+    # Compute safe X offset for labels
+    x_offset = -max(int(p["contig_length"]) for p in prophage_dict.values()) * 0.02
+
+    for y, label in zip(y_positions, y_labels):
+        ax1.text(x_offset, y, label, fontsize=6, va='center', ha='right', clip_on=False, transform=ax1.transData)
+
+
+    ax1.set_xlabel("Contig size, bp")
     ax1.set_title("Prophage positions in contigs")
 
     ax2.set_yticks([])
@@ -198,8 +313,26 @@ def plot_prophage_positions(
 
     ax3.invert_yaxis()  # Чтобы было как в ax1
 
-    plt.tight_layout()
+    print("🔍 Genomic maps will be looked up for the following prophage_ids:")
+    for pid in [prophage["prophage_id"] for prophage in ordered_prophage_dict.values()][:5]:
+        print(f"   {pid}")
+
+    plot_genomic_maps_on_subplot(
+        ax4,
+        y_positions,
+        [prophage["prophage_id"] for prophage in ordered_prophage_dict.values()],
+        feature_dict
+    )
+
+    plt.subplots_adjust(left=0.2, right=0.98, top=0.95, bottom=0.05, wspace=0.05)
+    
+    # Save as PNG
     plt.savefig(output_file, dpi=300)
+
+    # Also save as SVG
+    svg_output_file = Path(output_file).with_suffix(".svg")
+    plt.savefig(svg_output_file)
+
     plt.close()
 
 
@@ -343,7 +476,7 @@ def annotate_tree_features(
                 contig_length=int(matched_prophage["contig_length"])
             )
             matched += 1
-            print(f"[MATCHED] {leaf.name} ← {matched_prophage['prophage_id']}")
+            # print(f"[MATCHED] {leaf.name} ← {matched_prophage['prophage_id']}")
 
     print(f"[INFO] Matched {matched} prophage leaves out of {len(tree.get_leaves())}")
 
@@ -403,6 +536,21 @@ def get_custom_layout(family_to_color: Dict[str, str]):
     return custom_layout
 
 
+def print_unmatched_prophages(prophage_dict, tree: Tree):
+    tree_leaf_prefixes = {match_genome_id(leaf.name) for leaf in tree.iter_leaves()}
+
+    unmatched = []
+    for prophage in prophage_dict.values():
+        prophage_id = prophage.get("prophage_id", "")
+        prefix = prophage_id.split("|")[0]
+        if prefix not in tree_leaf_prefixes:
+            unmatched.append(prophage_id)
+
+    print("\n❌ Prophages not matched to tree leaves:")
+    for pid in unmatched:
+        print(f"   - {pid}")
+
+
 
 def render_tree(tree: Tree, output_file: Path, family_to_color: Dict[str, str]) -> None:
     ts = TreeStyle()
@@ -415,11 +563,13 @@ def render_tree(tree: Tree, output_file: Path, family_to_color: Dict[str, str]) 
 
 def main():
     wd = "/mnt/c/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/blast_prophages_vs_ncbi_and_gtdb"
-    crassus_phylogeny = "/mnt/c/crassvirales/CrassUS_old/CrassUS/results/prophage_analysis/5_phylogenies/3_iToL"
+    crassus_output = "/mnt/c/crassvirales/CrassUS_old/CrassUS/results/prophage_analysis"
+    crassus_phylogeny = f"{crassus_output}/5_phylogenies/3_iToL"
     tree_file = Path(f"{crassus_phylogeny}/TerL_iToL_renamed.nwk")
     itol_annotation = Path(f"{crassus_phylogeny}/TerL_iToL.txt")
     prophage_table = Path(f"{wd}/prophage_alignments_ncbi_and_gtdb_samtools_coordinates_edited_with_lengths.tsv")
     taxonomy_file = Path(f"{wd}/prophage_alignments_ncbi_and_gtdb_samtools_coordinates_edited_with_lengths_bacterial_contig_ids_taxonomy.tsv")
+    functional_annotation_file = Path(f"{crassus_output}/4_ORF/3_functional_annot_table_renamed.tsv")
 
     output_svg = Path(f"{wd}/TerL_with_prophages_annotated_tree.svg")
     prophage_plot = Path(f"{wd}/prophage_positions_plot.png")
@@ -430,6 +580,10 @@ def main():
 
     taxonomy_df = pd.read_csv(taxonomy_file, sep="\t", dtype=str)
 
+    feature_dict = load_functional_annotation(str(functional_annotation_file))
+
+    # print(f"{feature_dict=}")
+
     # NEW: propagate family annotation by MRCA
     propagate_family_annotations_by_mrca(tree, leaf_to_family, family_to_color)
 
@@ -437,11 +591,11 @@ def main():
     #leaf_metadata = build_leaf_metadata(tree)
     leaf_metadata, contig_to_protein, genome_to_protein = build_leaf_metadata(tree)
 
-    print(f'{leaf_metadata=}\n')
+    # print(f'{leaf_metadata=}\n')
 
-    print(f'{contig_to_protein=}\n')
+    # print(f'{contig_to_protein=}\n')
 
-    print(f'{genome_to_protein=}\n')
+    # print(f'{genome_to_protein=}\n')
 
     prophage_dict, prophage_df = parse_prophage_table(prophage_table)
 
@@ -459,7 +613,7 @@ def main():
 
 
     # prophage_dict = ordered_prophage_dict
-    print(prophage_dict)
+    # print(prophage_dict)
 
     leaf_ids = {match_genome_id(leaf.name) for leaf in tree.iter_leaves()}
     # matched_ids = set(prophage_dict.keys()) & leaf_ids
@@ -477,9 +631,22 @@ def main():
     render_tree(tree, output_svg, family_to_color)
     print(f"Annotated tree saved to: {output_svg}")
 
+    print("🔍 Example keys in feature_dict:")
+    print(list(feature_dict.keys())[:5])
+
+    #print("🔍 First 5 prophage_ids:")
+    #print(prophage_dict.keys()[:5])
+
     # New: plot genomic positions
     # plot_prophages(prophage_df, output_file=str(prophage_plot))
     # plot_prophage_positions(prophage_dict, output_file=str(prophage_plot))
+
+    compare_genomes_between_prophage_and_functional_tables(
+        prophage_df=prophage_df,  # ✅ Already read as DataFrame
+        functional_df=pd.read_csv(functional_annotation_file, sep="\t")  # ✅ Explicit load
+    )
+
+    print_unmatched_prophages(prophage_dict, tree)
 
     plot_prophage_positions(
         tree,
@@ -488,10 +655,11 @@ def main():
         leaf_to_family,
         family_to_color,
         merged_df,
-        output_file=str(prophage_plot)
+        output_file=str(prophage_plot),
+        feature_dict=feature_dict
     )
 
-    print(f"Prophage barplot saved to: {prophage_plot}")
+    print(f"Prophage plot saved to: {prophage_plot}")
 
 
 if __name__ == "__main__":
