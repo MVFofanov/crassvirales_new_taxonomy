@@ -52,6 +52,7 @@ def load_functional_annotation(path: str) -> Dict[str, List[GraphicFeature]]:
 
     return features_by_genome
 
+
 def plot_genomic_maps_on_subplot(
     ax: Axes,
     y_positions: List[int],
@@ -261,7 +262,7 @@ def plot_prophage_positions(
         ax_tax = axes_dict["taxonomy"][i]
         ax_genemap = axes_dict["genemap"][i]
 
-        # Barplot
+        # Barplot (full contig, red = prophage region)
         ax_bar.broken_barh([(0, contig_length)], (0, 0.8), facecolors='lightgrey')
         ax_bar.broken_barh([(start, end - start)], (0, 0.8), facecolors='red')
         ax_bar.set_xlim(0, contig_length)
@@ -292,28 +293,40 @@ def plot_prophage_positions(
         ax_tax.set_xticks([])
         ax_tax.set_yticks([])
 
-        # Genomic map
+        # Genomic map (only features within prophage region)
         features = feature_dict.get(prophage_id)
         if features:
-            sequence_length = max(f.end for f in features) + 100
-            record = GraphicRecord(sequence_length=sequence_length, features=features)
-            record.plot(
-                        ax=ax_genemap,
-                        with_ruler=False,
-                        strand_in_label_threshold=12
+            filtered = [
+                f for f in features
+                if start <= f.start <= f.end <= end
+            ]
+            if filtered:
+                # Shift coordinates so prophage starts at 0
+                shifted = [
+                    GraphicFeature(
+                        start=f.start - start,
+                        end=f.end - start,
+                        strand=f.strand,
+                        color=f.color,
+                        label=f.label
                     )
+                    for f in filtered
+                ]
+                sequence_length = max(f.end for f in shifted) + 100
+                record = GraphicRecord(sequence_length=sequence_length, features=shifted)
+                record.plot(
+                    ax=ax_genemap,
+                    with_ruler=False,
+                    strand_in_label_threshold=12
+                )
+                ax_genemap.set_xlim(0, sequence_length)
+            else:
+                ax_genemap.set_xticks([])
+                ax_genemap.set_yticks([])
         else:
             ax_genemap.set_xticks([])
             ax_genemap.set_yticks([])
 
-        # ax_genemap.set_xlim(0, 100000)
-        genemap_max = max(f.end for f in features) + 200
-        ax_genemap.set_xlim(0, genemap_max)
-
-        global_max_length = max(
-                                max(f.end for f in fs) for fs in feature_dict.values()
-                            )
-        ax_genemap.set_xlim(0, global_max_length + 200)
         ax_genemap.set_title("", fontsize=10)
 
     axes_dict["barplot"][0].set_title("Prophage positions in contigs")
