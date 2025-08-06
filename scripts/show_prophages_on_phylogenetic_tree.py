@@ -16,81 +16,140 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"  # Ensure Qt offscreen rendering
 def read_tree(tree_file: Path) -> Tree:
     return Tree(str(tree_file), format=1)
 
+def build_leaf_metadata(tree: Tree) -> Tuple[Dict[str, Dict[str, str]], Dict[str, str], Dict[str, str]]:
+    metadata = {}
+    contig_to_protein = {}
+    genome_to_protein = {}
+
+    for leaf in tree.iter_leaves():
+        protein_id = leaf.name
+        if "|" in protein_id:
+            contig_id = "|".join(protein_id.split("|")[:-2])
+        else:
+            contig_id = protein_id
+
+        # New logic: genome_id is just contig_id now
+        genome_id = contig_id
+
+        metadata[protein_id] = {
+            "protein_id": protein_id,
+            "contig_id": contig_id,
+            "genome_id": genome_id  # 👈 they are now equal
+        }
+
+        contig_to_protein[contig_id] = protein_id
+        genome_to_protein[genome_id] = protein_id
+
+        leaf.add_features(
+            protein_id=protein_id,
+            contig_id=contig_id,
+            genome_id=genome_id
+        )
+
+    return metadata, contig_to_protein, genome_to_protein
+
+def propagate_family_annotations_by_mrca(
+    tree: Tree,
+    leaf_to_family: Dict[str, Optional[str]],
+    family_color_map: Dict[str, str]
+) -> None:
+    """
+    Annotate unannotated leaves within pure-family clades by MRCA.
+    Updates `leaf_to_family` in-place.
+    """
+    for family in family_color_map:
+        # Find leaves already annotated with this family
+        family_leaves = [leaf for leaf, fam in leaf_to_family.items() if fam == family]
+        if not family_leaves:
+            continue
+
+        # Get MRCA
+        mrca = tree.get_common_ancestor(family_leaves)
+        mrca_leaves = mrca.get_leaves()
+
+        # Check if all leaves are either this family or unannotated
+        invalid = [
+            leaf.name for leaf in mrca_leaves
+            if leaf_to_family.get(leaf.name) not in {None, family}
+        ]
+        if invalid:
+            print(f"[SKIP] Cannot annotate {family} MRCA due to mixed leaves: {invalid[:3]}...")
+            continue
+
+        # Annotate all unannotated leaves in this subtree
+        for leaf in mrca_leaves:
+            if leaf_to_family.get(leaf.name) is None:
+                leaf_to_family[leaf.name] = family
+                print(f"[INFO] Propagated {family} to {leaf.name}")
+
+
 def plot_prophage_positions(
     tree: Tree,
     prophage_dict: Dict[str, Dict[str, str]],
+    leaf_metadata: Dict[str, Dict[str, str]],
     leaf_to_family: Dict[str, str],
     family_to_color: Dict[str, str],
     output_file: str
 ) -> None:
-    """
-    Plot prophage positions ordered by tree leaves with Crassvirales family color box on the right.
-    """
     from collections import OrderedDict
 
     # Get leaf order from tree
     leaf_order = [leaf.name for leaf in tree.iter_leaves()]
-
-    # Reorder prophage_dict based on leaf order
     ordered_prophage_dict = OrderedDict()
+
     for leaf_name in leaf_order:
         genome_id = match_genome_id(leaf_name)
         for contig_id, prophage in prophage_dict.items():
             if prophage.get("prophage_id", "").startswith(genome_id):
                 ordered_prophage_dict[contig_id] = prophage
 
-    fig, ax = plt.subplots(figsize=(10, len(ordered_prophage_dict) * 0.4))
+    n = len(ordered_prophage_dict)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, n * 0.4), gridspec_kw={'width_ratios': [10, 1]})
+
     y_labels = []
-    y_positions = list(range(len(ordered_prophage_dict)))
+    y_positions = list(range(n))
 
     for i, (contig_id, prophage_info) in enumerate(ordered_prophage_dict.items()):
         start = int(prophage_info["start"])
         end = int(prophage_info["end"])
         contig_length = int(prophage_info["contig_length"])
         prophage_id = prophage_info["prophage_id"]
-        genome_id = prophage_id.split("|")[0]
 
-        # Label: contig and genome
-        label = f"{contig_id}\n{genome_id}"
+        # Get protein id associated with contig
+        matching_leaf = leaf_metadata.get(prophage_id, {}).get("protein_id", None)
+        label = f"{contig_id}\n{matching_leaf}" if matching_leaf else contig_id
         y_labels.append(label)
 
-        # Contig bar
-        ax.broken_barh([(0, contig_length)], (i - 0.4, 0.8), facecolors='lightgrey')
-        ax.broken_barh([(start, end - start)], (i - 0.4, 0.8), facecolors='red')
+        # Genomic range (gray + red)
+        ax1.broken_barh([(0, contig_length)], (i - 0.4, 0.8), facecolors='lightgrey')
+        ax1.broken_barh([(start, end - start)], (i - 0.4, 0.8), facecolors='red')
 
-        # Family color box (right side)
-        # family = leaf_to_family.get(prophage_id)
+        # === Family color box as heatmap-style block ===
+        family = None
+        for leaf in leaf_to_family:
+            if leaf.startswith(prophage_id):
+                family = leaf_to_family[leaf]
+                break
+        if not family:
+            # try fallback by genome ID
+            genome_id = prophage_id.split("|")[0]
+            match = next((l for l in leaf_to_family if genome_id in l), None)
+            if match:
+                family = leaf_to_family[match]
 
-        # Find the leaf name that starts with this prophage_id to get family color
-        # genome_id = prophage_id.split("|")[0]
-        # matching_leaf = next((leaf for leaf in leaf_to_family if leaf.startswith(genome_id)), None)
+        color = family_to_color.get(family, "#999999") if family else "#FFFFFF"
+        ax2.broken_barh([(0, 1)], (i - 0.4, 0.8), facecolors=color)
 
-        print("=== leaf_to_family keys ===")
-        for leaf in list(leaf_to_family)[:5]:  # show a few examples
-            print(leaf)
-        print("===========================")
+    # Set labels and layout
+    ax1.set_yticks(y_positions)
+    ax1.set_yticklabels(y_labels, fontsize=6)
+    ax1.set_xlabel("Genomic position")
+    ax1.set_title("Prophage positions in contigs (ordered by tree)")
 
-        prophage_genome_id = prophage_id.split("|")[0]
+    ax2.set_yticks([])
+    ax2.set_xticks([])
+    ax2.set_title("Family")
 
-        # Try exact match first
-        matching_leaf = next((leaf for leaf in leaf_to_family if prophage_genome_id in leaf), None)
-
-        if not matching_leaf:
-            print(f"[WARN] Could not find matching leaf for {prophage_genome_id}")
-
-        family = leaf_to_family.get(matching_leaf)
-
-        print(f'{genome_id=}\t{matching_leaf=}\t{family=}')
-        if family:
-            color = family_to_color.get(family, "#999999")
-            # Draw a small colored bar at the far right
-            ax.broken_barh([(contig_length + 1000, 50000)], (i - 0.3, 0.6), facecolors=color)
-            # print(f'{genome_id=}\t{matching_leaf=}\t{family=}')
-
-    ax.set_yticks(y_positions)
-    ax.set_yticklabels(y_labels, fontsize=6)
-    ax.set_xlabel("Genomic position")
-    ax.set_title("Prophage positions in contigs (ordered by tree)")
     plt.tight_layout()
     plt.savefig(output_file, dpi=300)
     plt.close()
@@ -161,15 +220,18 @@ def annotate_tree_features(
     tree: Tree,
     leaf_to_family: Dict[str, str],
     family_to_color: Dict[str, str],
-    prophage_dict: Dict[str, Dict[str, str]]
+    prophage_dict: Dict[str, Dict[str, str]],
+    leaf_metadata: Dict[str, Dict[str, str]]
 ) -> None:
     matched = 0
 
     for leaf in tree.iter_leaves():
+        meta = leaf_metadata[leaf.name]
+        genome_id = meta["genome_id"]
+
         matched_prophage = None
         for prophage in prophage_dict.values():
-            prophage_id = prophage.get("prophage_id", "")
-            if leaf.name.startswith(prophage_id):
+            if prophage.get("prophage_id", "").startswith(genome_id):
                 matched_prophage = prophage
                 break
 
@@ -267,6 +329,19 @@ def main():
     tree = read_tree(tree_file)
     leaf_to_family, family_to_color, _ = parse_itol_annotation(itol_annotation)
 
+    # NEW: propagate family annotation by MRCA
+    propagate_family_annotations_by_mrca(tree, leaf_to_family, family_to_color)
+
+    # === Build consistent metadata mapping for each leaf ===
+    #leaf_metadata = build_leaf_metadata(tree)
+    leaf_metadata, contig_to_protein, genome_to_protein = build_leaf_metadata(tree)
+
+    print(f'{leaf_metadata=}\n')
+
+    print(f'{contig_to_protein=}\n')
+
+    print(f'{genome_to_protein=}\n')
+
     prophage_dict, prophage_df = parse_prophage_table(prophage_table)
 
     # leaf_order = [leaf.name for leaf in tree.iter_leaves()]
@@ -293,7 +368,8 @@ def main():
     print(f"[INFO] Matching prophage IDs: {matched} out of {len(prophage_dict)} total prophages")
 
 
-    annotate_tree_features(tree, leaf_to_family, family_to_color, prophage_dict)
+    # annotate_tree_features(tree, leaf_to_family, family_to_color, prophage_dict)
+    annotate_tree_features(tree, leaf_to_family, family_to_color, prophage_dict, leaf_metadata)
     render_tree(tree, output_svg, family_to_color)
     print(f"Annotated tree saved to: {output_svg}")
 
@@ -304,6 +380,7 @@ def main():
     plot_prophage_positions(
         tree,
         prophage_dict,
+        leaf_metadata,
         leaf_to_family,
         family_to_color,
         output_file=str(prophage_plot)
