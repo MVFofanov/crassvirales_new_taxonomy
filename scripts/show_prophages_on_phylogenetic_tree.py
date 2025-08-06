@@ -3,11 +3,14 @@
 from collections import OrderedDict
 import os
 from pathlib import Path
-from typing import Dict, Tuple, Set, Optional
+from typing import Dict, Tuple, List, Set, Optional
 from ete3 import Tree, TreeStyle, NodeStyle, RectFace, faces, TextFace, Face
 import matplotlib
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import pandas as pd
+
+import textwrap
 
 matplotlib.use('Agg')
 os.environ["QT_QPA_PLATFORM"] = "offscreen"  # Ensure Qt offscreen rendering
@@ -82,6 +85,19 @@ def propagate_family_annotations_by_mrca(
                 leaf_to_family[leaf.name] = family
                 print(f"[INFO] Propagated {family} to {leaf.name}")
 
+def merge_prophage_with_taxonomy(
+    prophage_df: pd.DataFrame,
+    taxonomy_df: pd.DataFrame
+) -> pd.DataFrame:
+    """Merge taxonomy info into prophage DataFrame using contig_id ↔ accession."""
+    merged_df = prophage_df.merge(
+        taxonomy_df,
+        how='left',
+        left_on='contig_id',
+        right_on='accession'
+    )
+    return merged_df
+
 
 def plot_prophage_positions(
     tree: Tree,
@@ -89,12 +105,15 @@ def plot_prophage_positions(
     leaf_metadata: Dict[str, Dict[str, str]],
     leaf_to_family: Dict[str, str],
     family_to_color: Dict[str, str],
+    taxonomy_df: pd.DataFrame,
     output_file: str
 ) -> None:
     from collections import OrderedDict
 
     # Get leaf order from tree
     leaf_order = [leaf.name for leaf in tree.iter_leaves()]
+    # Sort prophage table in the order of tree leaves (by matching genome_id prefix)
+    taxonomy_labels = []
     ordered_prophage_dict = OrderedDict()
 
     for leaf_name in leaf_order:
@@ -102,9 +121,29 @@ def plot_prophage_positions(
         for contig_id, prophage in prophage_dict.items():
             if prophage.get("prophage_id", "").startswith(genome_id):
                 ordered_prophage_dict[contig_id] = prophage
+                # Fetch taxonomy at the same time
+                tax_row = taxonomy_df[taxonomy_df["accession"] == contig_id]
+                taxonomy = tax_row["taxonomy"].values[0] if not tax_row.empty else "NA"
+                taxonomy_labels.append(taxonomy)
+                break  # one match is enough
+
+    # Now fetch taxonomies directly from merged_df
+    # for contig_id in ordered_prophage_dict:
+    #     tax_row = taxonomy_df[taxonomy_df["accession"] == contig_id]
+    #     taxonomy = tax_row["taxonomy"].values[0] if not tax_row.empty else "NA"
+    #     taxonomy_labels.append(taxonomy)
+        # print(f"[TAXONOMY] {contig_id} → {taxonomy}")
 
     n = len(ordered_prophage_dict)
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, n * 0.4), gridspec_kw={'width_ratios': [10, 1]})
+    fig = plt.figure(figsize=(20, n * 0.4))
+    gs = fig.add_gridspec(1, 3, width_ratios=[10, 1, 12])
+
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[0, 1], sharey=ax1)
+    ax3 = fig.add_subplot(gs[0, 2], sharey=ax1)
+
+    plt.setp(ax2.get_yticklabels(), visible=False)
+    plt.setp(ax3.get_yticklabels(), visible=False)
 
     y_labels = []
     y_positions = list(range(n))
@@ -115,23 +154,19 @@ def plot_prophage_positions(
         contig_length = int(prophage_info["contig_length"])
         prophage_id = prophage_info["prophage_id"]
 
-        # Get protein id associated with contig
         matching_leaf = leaf_metadata.get(prophage_id, {}).get("protein_id", None)
         label = f"{contig_id}\n{matching_leaf}" if matching_leaf else contig_id
         y_labels.append(label)
 
-        # Genomic range (gray + red)
         ax1.broken_barh([(0, contig_length)], (i - 0.4, 0.8), facecolors='lightgrey')
         ax1.broken_barh([(start, end - start)], (i - 0.4, 0.8), facecolors='red')
 
-        # === Family color box as heatmap-style block ===
         family = None
         for leaf in leaf_to_family:
             if leaf.startswith(prophage_id):
                 family = leaf_to_family[leaf]
                 break
         if not family:
-            # try fallback by genome ID
             genome_id = prophage_id.split("|")[0]
             match = next((l for l in leaf_to_family if genome_id in l), None)
             if match:
@@ -140,19 +175,82 @@ def plot_prophage_positions(
         color = family_to_color.get(family, "#999999") if family else "#FFFFFF"
         ax2.broken_barh([(0, 1)], (i - 0.4, 0.8), facecolors=color)
 
-    # Set labels and layout
+    # Axis settings
     ax1.set_yticks(y_positions)
-    ax1.set_yticklabels(y_labels, fontsize=6)
+    ax1.set_yticklabels(y_labels, fontsize=8)
     ax1.set_xlabel("Genomic position")
-    ax1.set_title("Prophage positions in contigs (ordered by tree)")
+    ax1.set_title("Prophage positions in contigs")
 
     ax2.set_yticks([])
     ax2.set_xticks([])
     ax2.set_title("Family")
 
+    # Axis settings for ax3
+    ax3.set_xlim(0, 1)
+    ax3.set_xticks([])
+    ax3.set_yticks(y_positions)  # 👈 Привязываем по Y к тем же позициям
+    ax3.set_yticklabels([])      # Не дублируем метки
+    ax3.set_title("Taxonomy", fontsize=10)
+
+    for i, tax in zip(y_positions, taxonomy_labels):
+        # truncated_tax = tax[:100] + "..." if len(tax) > 100 else tax
+        ax3.text(0, i, tax, va='center', ha='left', fontsize=8, clip_on=False)
+
+    ax3.invert_yaxis()  # Чтобы было как в ax1
+
     plt.tight_layout()
     plt.savefig(output_file, dpi=300)
     plt.close()
+
+
+
+def add_taxonomy_subplot(
+    fig: plt.Figure,
+    ax_main: plt.Axes,
+    genome_ids: List[str],
+    taxonomies: List[str],
+    subplot_width: float = 0.25
+) -> plt.Axes:
+    """
+    Add a new subplot to the right showing taxonomy info for each genome.
+
+    Args:
+        fig: The main matplotlib figure.
+        ax_main: The main axis (e.g., barplot).
+        genome_ids: List of genome IDs (y-axis positions).
+        taxonomies: List of corresponding taxonomy strings.
+        subplot_width: Fractional width of the subplot (e.g. 0.25 = 25% of total).
+    Returns:
+        ax_taxonomy: New subplot axis.
+    """
+    from matplotlib import gridspec
+
+    # Get position of main axis
+    bbox = ax_main.get_position()
+    total_width = bbox.width + subplot_width
+    fig.clear()
+
+    # Setup new grid
+    gs = fig.add_gridspec(1, 2, width_ratios=[bbox.width, subplot_width], wspace=0.05)
+    ax_main_new = fig.add_subplot(gs[0, 0])
+    ax_taxonomy = fig.add_subplot(gs[0, 1], sharey=ax_main_new)
+
+    # Re-plot the main plot if needed
+    # (optional: you might want to pass drawing code here again)
+
+    # Plot taxonomy text
+    ax_taxonomy.set_xlim(0, 1)
+    ax_taxonomy.set_xticks([])
+    ax_taxonomy.set_yticks([])
+
+    for i, (gid, tax) in enumerate(zip(genome_ids, taxonomies)):
+        if pd.isna(tax):
+            tax = "NA"
+        ax_taxonomy.text(0, i, tax, va='center', ha='left', fontsize=8, clip_on=True)
+
+    ax_taxonomy.set_title("Taxonomy", fontsize=10)
+    ax_taxonomy.invert_yaxis()  # Align with main plot
+    return ax_taxonomy
 
 
 
@@ -321,6 +419,7 @@ def main():
     tree_file = Path(f"{crassus_phylogeny}/TerL_iToL_renamed.nwk")
     itol_annotation = Path(f"{crassus_phylogeny}/TerL_iToL.txt")
     prophage_table = Path(f"{wd}/prophage_alignments_ncbi_and_gtdb_samtools_coordinates_edited_with_lengths.tsv")
+    taxonomy_file = Path(f"{wd}/prophage_alignments_ncbi_and_gtdb_samtools_coordinates_edited_with_lengths_bacterial_contig_ids_taxonomy.tsv")
 
     output_svg = Path(f"{wd}/TerL_with_prophages_annotated_tree.svg")
     prophage_plot = Path(f"{wd}/prophage_positions_plot.png")
@@ -328,6 +427,8 @@ def main():
 
     tree = read_tree(tree_file)
     leaf_to_family, family_to_color, _ = parse_itol_annotation(itol_annotation)
+
+    taxonomy_df = pd.read_csv(taxonomy_file, sep="\t", dtype=str)
 
     # NEW: propagate family annotation by MRCA
     propagate_family_annotations_by_mrca(tree, leaf_to_family, family_to_color)
@@ -343,6 +444,9 @@ def main():
     print(f'{genome_to_protein=}\n')
 
     prophage_dict, prophage_df = parse_prophage_table(prophage_table)
+
+    merged_df = merge_prophage_with_taxonomy(prophage_df, taxonomy_df)
+
 
     # leaf_order = [leaf.name for leaf in tree.iter_leaves()]
     # ordered_prophage_dict = OrderedDict()
@@ -383,6 +487,7 @@ def main():
         leaf_metadata,
         leaf_to_family,
         family_to_color,
+        merged_df,
         output_file=str(prophage_plot)
     )
 
