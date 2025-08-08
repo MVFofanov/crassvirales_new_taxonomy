@@ -22,6 +22,12 @@ import textwrap
 matplotlib.use('Agg')
 os.environ["QT_QPA_PLATFORM"] = "offscreen"  # Ensure Qt offscreen rendering
 
+DEFAULT_COLOR = "#bfbfbf"  # neutral grey
+
+TITLE_FONTSIZE = 20  # or 11 if you want them same as y-axis labels
+
+TEXT_FONTSIZE = 12
+
 ORDER_LIKE = re.compile(r".*ales$", re.IGNORECASE)
 
 # top-level (after imports)
@@ -114,6 +120,26 @@ def _try_ncbi_order(tokens: List[str]) -> Optional[str]:
         return None
     return None
 
+def _try_ncbi_rank(tokens: List[str], rank: str) -> Optional[str]:
+    """Return the first token that is that exact NCBI rank, if possible."""
+    if _NCBI is None:
+        return None
+    try:
+        name2tax = _NCBI.get_name_translator(tokens)
+        if not name2tax:
+            return None
+        taxids = [name2tax[t][0] for t in tokens if t in name2tax]
+        ranks = _NCBI.get_rank(taxids)  # {taxid: rank}
+        for tok in tokens:
+            tids = name2tax.get(tok)
+            if not tids:
+                continue
+            if ranks.get(tids[0]) == rank:
+                return tok
+    except Exception:
+        return None
+    return None
+
 def _heuristic_order(tokens: List[str]) -> Optional[str]:
     # pick first token that looks like an order (…ales)
     for tok in tokens:
@@ -156,6 +182,35 @@ def extract_order_with_fallback(taxonomy: str) -> Tuple[str, str]:
 
     return "unknown", "Unknown"
 
+def extract_class_with_fallback(taxonomy: str) -> Tuple[str, str]:
+    """
+    Returns (used_rank, name) where used_rank ∈ {'class','phylum','order','family','unknown'} for bacterial class display.
+    Priority: NCBITaxa(class) → heuristic class by suffix → order → phylum → family → Unknown.
+    """
+    tokens = _split_taxonomy_string(taxonomy)
+    if not tokens:
+        return "unknown", "Unknown"
+
+    # 1) NCBI
+    cls = _try_ncbi_rank(tokens, "class")
+    if cls:
+        return "class", cls
+
+    # 2) Heuristic for class-like suffixes
+    cls = _pick_suffix(tokens, ("ia", "bia", "illi", "idia", "eria"))  # e.g., Bacilli, Clostridia, Halobacteria
+    if cls:
+        return "class", cls
+
+    # 3) Loose fallbacks so we still color something if present
+    ord_name = _pick_suffix(tokens, ("ales",))
+    if ord_name: return "order", ord_name
+    phyl = _pick_suffix(tokens, ("ota", "otae"))
+    if phyl: return "phylum", phyl
+    fam = _pick_suffix(tokens, ("aceae",))
+    if fam: return "family", fam
+
+    return "unknown", "Unknown"
+
 # def build_order_color_map(unique_orders: list) -> dict:
 #     """Assign distinct colors to orders, keeping 'unknown' grey."""
 #     import itertools
@@ -182,23 +237,40 @@ def build_order_maps_for_contigs(
     """
 
     # === fixed order → color mapping ===
-    fixed_order_color_map: Dict[str, str] = {
-        'Acholeplasmatales': '#1f77b4',
-        'Bacillales': '#aec7e8',
-        'Bacteria': '#ff7f0e',
-        'Bdellovibrionales': '#ffbb78',
-        'Candidatus Borrarchaeota': '#2ca02c',
-        'Candidatus Pacearchaeota': '#98df8a',
-        'Chitinophagales': '#d62728',
-        'Cytophagales': '#ff9896',
-        'Erysipelotrichales': '#9467bd',
-        'Eubacteriales': '#c5b0d5',
-        'Halobacteriales': '#8c564b',
-        'Lachnospirales': '#c49c94',
-        'Methanobacteriales': '#e377c2',
-        'Peptostreptococcales': '#f7b6d2',
-        'Rickettsiales': '#7f7f00',
-        'Vampirovibrionales': '#bcbd22',
+    fixed_order_color_map = {
+        # Mollicutes
+        'Acholeplasmatales':     '#9467bd',  # Mollicutes
+        # Bacilli
+        'Bacillales':            '#1f77b4',  # Bacilli
+        # use 'Unknown' instead of 'Bacteria' as an “order”
+        'Unknown':               '#999999',
+
+        # Bdellovibrionia
+        'Bdellovibrionales':     '#aec7e8',  # Bdellovibrionia
+
+        # Candidatus groups (keep same as class)
+        'Candidatus Borrarchaeota': '#ff7f0e',
+        'Candidatus Pacearchaeota': '#fbc15e',
+
+        # Bacteroidetes/CFB group
+        'Chitinophagales':       '#2ca02c',  # Chitinophagia
+        'Cytophagales':          '#98df8a',  # Cytophagia
+
+        # Firmicutes (Clostridia)
+        'Erysipelotrichales':    '#e377c2',  # Erysipelotrichia
+        'Eubacteriales':         '#ff7f0e',  # Clostridia (deprecated order but maps here)
+        'Lachnospirales':        '#ff7f0e',  # Clostridia
+        'Peptostreptococcales':  '#ff7f0e',  # Clostridia
+
+        # Archaea
+        'Halobacteriales':       '#7f7f7f',  # Halobacteria (see note above)
+        'Methanobacteriales':    '#ff9896',  # Methanobacteria
+
+        # Proteobacteria (Alpha)
+        'Rickettsiales':         '#d62728',  # Alphaproteobacteria
+
+        # Candidate phylum/class Vampirovibriophyceae
+        'Vampirovibrionales':    '#c5b0d5',  # Vampirovibriophyceae
     }
 
     contig_order_map: Dict[str, str] = {}
@@ -235,6 +307,72 @@ def build_order_maps_for_contigs(
     print()
 
     return contig_order_map, order_color_map
+
+def build_class_maps_for_contigs(
+    taxonomy_df: pd.DataFrame,
+    contig_ids_to_plot: List[str],
+    accession_col: str = "accession",
+    taxonomy_col: str = "taxonomy"
+) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """
+    Returns:
+      contig_class_map: contig_id -> class_name_or_fallback
+      class_color_map:  class_name -> color (only for classes present)
+    """
+
+    # Fixed mapping (pick distinct tab20-ish colors; edit if you want specific classes)
+    class_color_map = {
+        'Alphaproteobacteria': '#d62728',
+        'Bacilli':              '#1f77b4',
+        'Bdellovibrionia':      '#aec7e8',
+        'Candidatus Borrarchaeota': '#ff7f0e',
+        'Candidatus Pacearchaeota': '#fbc15e',
+        'Chitinophagia':        '#2ca02c',
+        'Clostridia':           '#ff7f0e',
+        'Cytophagia':           '#98df8a',
+        'Erysipelotrichia':     '#e377c2',
+        'Halobacteria':         '#7f7f7f',   # consider swapping to a non-gray if you want "gray = unknown only"
+        'Ignavibacteria':       '#d62728',
+        'Methanobacteria':      '#ff9896',
+        'Mollicutes':           '#9467bd',
+        'Vampirovibriophyceae': '#c5b0d5',
+        'Unknown':              '#999999',   # use this for unassigned
+    }
+
+    contig_class_map: Dict[str, str] = {}
+    seen_classes: List[str] = []
+
+    tax_by_acc = dict(zip(taxonomy_df[accession_col].astype(str),
+                          taxonomy_df[taxonomy_col].astype(str)))
+
+    for contig_id in contig_ids_to_plot:
+        tax = tax_by_acc.get(str(contig_id), "")
+        _, cls_name = extract_class_with_fallback(tax)
+        contig_class_map[str(contig_id)] = cls_name
+        seen_classes.append(cls_name)
+
+    unique_classes = sorted(set(seen_classes))
+
+    # Final color map
+    class_color_map: Dict[str, str] = {}
+    import itertools
+    color_cycle = itertools.cycle(plt.cm.tab20.colors)
+
+    for c in unique_classes:
+        if c.lower() == "unknown":
+            class_color_map[c] = "#999999"
+        elif c in class_color_map:
+            class_color_map[c] = class_color_map[c]
+        else:
+            class_color_map[c] = next(color_cycle)
+
+    # (optional) print what’s used
+    print("\n🔷 Class → Color mapping (shown on plot):")
+    for c in unique_classes:
+        print(f"  '{c}': '{class_color_map[c]}',")
+    print()
+
+    return contig_class_map, class_color_map
 
 
 def plot_genomic_map(ax, features_df, prophage_start, prophage_end, allowed_genes):
@@ -402,25 +540,23 @@ def merge_prophage_with_taxonomy(
 
 
 def create_gridspec_axes(n_rows: int) -> Tuple[plt.Figure, Dict[str, List[plt.Axes]]]:
-    # Increase width (20 → 24) and row height multiplier (0.45 → 0.55)
-    fig = plt.figure(figsize=(30, n_rows * 0.55))
-
-    # columns: barplot | family | order | taxonomy | genemap
+    # a touch wider; genemap also wide
+    fig = plt.figure(figsize=(50, n_rows * 0.55))
+    # columns: barplot | family | class | order | taxonomy | genemap
     gs = fig.add_gridspec(
-        n_rows,
-        5,
-        width_ratios=[20, 1.2, 1.2, 12, 40],  # slightly wider family/order
+        n_rows, 6,
+        width_ratios=[20, 1.2, 1.2, 1.2, 12, 70],
         wspace=0.05
     )
 
-    axes = {"barplot": [], "family": [], "order": [], "taxonomy": [], "genemap": []}
+    axes = {"barplot": [], "family": [], "class": [], "order": [], "taxonomy": [], "genemap": []}
     for i in range(n_rows):
         axes["barplot"].append(fig.add_subplot(gs[i, 0]))
         axes["family"].append(fig.add_subplot(gs[i, 1], sharey=axes["barplot"][i]))
-        axes["order"].append(fig.add_subplot(gs[i, 2], sharey=axes["barplot"][i]))
-        axes["taxonomy"].append(fig.add_subplot(gs[i, 3], sharey=axes["barplot"][i]))
-        axes["genemap"].append(fig.add_subplot(gs[i, 4], sharey=axes["barplot"][i]))
-
+        axes["class"].append(fig.add_subplot(gs[i, 2], sharey=axes["barplot"][i]))
+        axes["order"].append(fig.add_subplot(gs[i, 3], sharey=axes["barplot"][i]))
+        axes["taxonomy"].append(fig.add_subplot(gs[i, 4], sharey=axes["barplot"][i]))
+        axes["genemap"].append(fig.add_subplot(gs[i, 5], sharey=axes["barplot"][i]))
     return fig, axes
 
 
@@ -456,6 +592,11 @@ def plot_prophage_positions(
 
     # Build order colors only for what we actually plot
     contig_order_map, order_color_map = build_order_maps_for_contigs(
+        taxonomy_df, contigs_in_plot
+    )
+
+    # NEW: build class colors only for what we actually plot
+    contig_class_map, class_color_map = build_class_maps_for_contigs(
         taxonomy_df, contigs_in_plot
     )
 
@@ -519,7 +660,9 @@ def plot_prophage_positions(
         ))
 
         # Label
-        ax_bar.set_ylabel(full_label, fontsize=6, ha='right', rotation=0)
+        ax_bar.set_ylabel(full_label, fontsize=TEXT_FONTSIZE, ha='right', rotation=0)
+
+        ax_cls = axes_dict["class"][i]  # NEW
 
         # 2) Family box  (fills entire mini-axis)
         # figure out the family for this row
@@ -542,10 +685,20 @@ def plot_prophage_positions(
         ax_fam.add_patch(mpatches.Rectangle((0, 0), 1, 1,
                                             transform=ax_fam.transAxes,
                                             fill=False, edgecolor="black", linewidth=0.4))
+        
+        # 3) Class box (NEW)
+        class_name = contig_class_map.get(contig_id, "unknown")
+        cls_color = class_color_map.get(class_name, DEFAULT_COLOR)
+        ax_cls.set_xlim(0, 1); ax_cls.set_ylim(0, 1)
+        ax_cls.set_xticks([]); ax_cls.set_yticks([])
+        ax_cls.patch.set_facecolor(cls_color)
+        ax_cls.add_patch(mpatches.Rectangle((0, 0), 1, 1,
+                                            transform=ax_cls.transAxes,
+                                            fill=False, edgecolor="black", linewidth=0.4))
 
-        # 3) Order box  (fills entire mini-axis)
+        # 4) Order box  (fills entire mini-axis)
         order_name = contig_order_map.get(contig_id, "unknown")
-        ord_color = order_color_map.get(order_name, "#999999")
+        ord_color = order_color_map.get(order_name, DEFAULT_COLOR)
         ax_ord.set_xlim(0, 1); ax_ord.set_ylim(0, 1)
         ax_ord.set_xticks([]); ax_ord.set_yticks([])
         ax_ord.patch.set_facecolor(ord_color)
@@ -553,11 +706,11 @@ def plot_prophage_positions(
                                             transform=ax_ord.transAxes,
                                             fill=False, edgecolor="black", linewidth=0.4))
 
-        # 4) Taxonomy text
-        ax_tax.text(0, 0.4, taxonomy_labels[i], fontsize=7, va='center', ha='left')
+        # 5) Taxonomy text
+        ax_tax.text(0, 0.4, taxonomy_labels[i], fontsize=10, va='center', ha='left')
         ax_tax.set_xlim(0, 1); ax_tax.set_xticks([]); ax_tax.set_yticks([])
 
-        # 5) Genomic map (handle absolute vs local coords + debug + fallbacks)
+        # 6) Genomic map (handle absolute vs local coords + debug + fallbacks)
         DEBUG_GENEMAP = False  # set True to print diagnostics
 
         if feature_dict is not None:
@@ -645,17 +798,35 @@ def plot_prophage_positions(
 
 
     # Titles
-    axes_dict["barplot"][0].set_title("Prophage positions in contigs")
-    # axes_dict["family"][0].set_title("Crassvirales family")
-    # axes_dict["order"][0].set_title("Bacterial order")
-    axes_dict["taxonomy"][0].set_title("Taxonomy")
-    axes_dict["genemap"][0].set_title("Genomic map (prophage)")
+    axes_dict["barplot"][0].set_title(
+        "Prophage coordinates in bacterial contigs, bp",
+        fontsize=TITLE_FONTSIZE
+        )
+    axes_dict["taxonomy"][0].set_title(
+        "Taxonomy lineage",
+        fontsize=TITLE_FONTSIZE
+    )
+    axes_dict["genemap"][0].set_title(
+        "Prophage genomic map",
+        fontsize=TITLE_FONTSIZE
+)
 
     # Order legend (ONLY orders present on this plot)
-    handles = [mpatches.Patch(color=order_color_map[o], label=o) for o in sorted(order_color_map)]
-    fig.legend(handles=handles, ncol=4, loc="lower center", bbox_to_anchor=(0.5, -0.01), frameon=False, fontsize=8)
+    # Order legend
+    # Order legend (right bottom)
+    order_handles = [mpatches.Patch(color=order_color_map[o], label=o) for o in sorted(order_color_map)]
+    leg1 = fig.legend(order_handles, [h.get_label() for h in order_handles],
+                    ncol=4, loc="lower right", bbox_to_anchor=(1.0, -0.01),
+                    frameon=False, fontsize=TEXT_FONTSIZE, title="Bacterial order")
 
-    fig.tight_layout(rect=[0.2, 0.08, 1, 1])  # increase left from 0.0 → 0.12
+    # Class legend (left bottom)
+    class_handles = [mpatches.Patch(color=class_color_map[c], label=c) for c in sorted(class_color_map)]
+    leg2 = fig.legend(class_handles, [h.get_label() for h in class_handles],
+                    ncol=4, loc="lower left", bbox_to_anchor=(0.0, -0.01),
+                    frameon=False, fontsize=TEXT_FONTSIZE, title="Bacterial class")
+
+    fig.tight_layout(rect=[0.2, 0.1, 1, 0.90])  # Adjust as needed
+    # plt.subplots_adjust(top=0.92, bottom=0.15)
 
     fig.canvas.draw()  # ensure positions are up to date
 
@@ -663,19 +834,14 @@ def plot_prophage_positions(
 
     for ax, label in [
         (axes_dict["family"][0], "Crassvirales family"),
+        (axes_dict["class"][0],  "Bacterial class"),
         (axes_dict["order"][0],  "Bacterial order"),
     ]:
-        # Get the axis box in figure coords
         bbox = ax.get_position()
         x_mid = bbox.x0 + bbox.width / 2.0
-        y_top = bbox.y1 + 0.01  # a tiny margin above the axes
-
-        # Draw rotated text at the column center
-        fig.text(
-            x_mid, y_top, label,
-            rotation=90, ha="center", va="bottom",
-            fontsize=10, clip_on=False
-        )
+        y_top = bbox.y1 + 0.01
+        fig.text(x_mid, y_top, label, rotation=90, ha="center", va="bottom",
+                fontsize=TITLE_FONTSIZE, clip_on=False)
 
     plt.savefig(output_file, dpi=300)
     plt.savefig(Path(output_file).with_suffix(".svg"))
