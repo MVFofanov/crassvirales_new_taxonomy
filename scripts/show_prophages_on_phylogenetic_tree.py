@@ -60,17 +60,17 @@ def load_functional_annotation(path: str) -> Dict[str, List[GraphicFeature]]:
     allowed = {"TerL", "portal", "MCP", "Ttub", "Tstab", "primase", "PolB", "PolA", "DnaB"}
 
     for _, row in df.iterrows():
-        genome = str(row["genome"])
-        start = int(row["start"])
-        end = int(row["end"])
-        strand = 1 if str(row["strand"]).strip() == "+" else -1
+        genome = str(row["genome"]).strip()  # <- strip to avoid key mismatches
+        s = int(row["start"])
+        e = int(row["end"])
+        # normalize
+        start, end = (s, e) if s <= e else (e, s)
 
+        strand = 1 if str(row["strand"]).strip() == "+" else -1
         yutin_raw = row.get("yutin", None)
         yutin = (str(yutin_raw).strip() if pd.notna(yutin_raw) else "")
 
-        # color: red only if yutin present, else lightgrey
         color = "red" if yutin else "lightgrey"
-        # label: only for allowed markers
         label = yutin if yutin in allowed else None
 
         features_by_genome.setdefault(genome, []).append(
@@ -557,34 +557,91 @@ def plot_prophage_positions(
         ax_tax.text(0, 0.4, taxonomy_labels[i], fontsize=7, va='center', ha='left')
         ax_tax.set_xlim(0, 1); ax_tax.set_xticks([]); ax_tax.set_yticks([])
 
-        # 5) Genomic map (dna_features_viewer) — shared max prophage scale
-        # Genomic map (prophage-only, true scale)
+        # 5) Genomic map (handle absolute vs local coords + debug + fallbacks)
+        DEBUG_GENEMAP = True  # set True to print diagnostics
+
         if feature_dict is not None:
-            # you’re using feature_dict (pre-built GraphicFeatures), which is fine;
-            # but if you want to use the raw table instead, filter the DF and call plot_genomic_map().
-            # Example using your pre-built dict:
-            feats = feature_dict.get(prophage_id)
+            # --- try several keys ---
+            lookups = [
+                prophage_id.strip(),
+                contig_id.strip(),
+                contig_id.split("|")[0].strip(),
+            ]
+            feats = None
+            used_key = None
+            for k in lookups:
+                if k in feature_dict:
+                    feats = feature_dict[k]
+                    used_key = k
+                    break
+
             if feats:
-                filtered = [f for f in feats if (start <= f.start <= f.end <= end)]
-                if filtered:
-                    shifted = [
-                        GraphicFeature(
-                            start=f.start - start, end=f.end - start,
-                            strand=f.strand, color=f.color, label=f.label
-                        ) for f in filtered
-                    ]
-                    record = GraphicRecord(sequence_length=prophage_len, features=shifted)
-                    record.plot(ax=ax_genemap, with_ruler=False, strand_in_label_threshold=12)
-                    ax_genemap.set_xlim(0, max_prophage_len)  # or prophage_len if you prefer per-row scaling
+                # normalize coordinates to integers and compute span
+                fs_list, fe_list = [], []
+                norm = []
+                for f in feats:
+                    fs = int(min(int(f.start), int(f.end)))
+                    fe = int(max(int(f.start), int(f.end)))
+                    fs_list.append(fs); fe_list.append(fe)
+                    norm.append((fs, fe, f))
+
+                fs_min = min(fs_list)
+                fe_max = max(fe_list)
+
+                # Heuristic: treat as local if features look like 1..prophage_len
+                is_local = (fs_min <= 5) and (fe_max <= prophage_len * 1.2)
+
+                if is_local:
+                    if DEBUG_GENEMAP:
+                        print(f"[GMAP] Using LOCAL coords for {prophage_id!r} (key={used_key!r}); "
+                            f"window=({start},{end}), feat span=({fs_min},{fe_max}), len={prophage_len}")
+                    local_feats = []
+                    for fs, fe, f in norm:
+                        # clip to [0, prophage_len] and (optionally) convert 1-based → 0-based
+                        cs = max(0, fs - 1)           # if your local table is 1-based
+                        ce = min(prophage_len, fe)
+                        if ce > cs:
+                            local_feats.append(
+                                GraphicFeature(start=cs, end=ce, strand=f.strand,
+                                            color=f.color, label=f.label)
+                            )
+                    if local_feats:
+                        record = GraphicRecord(sequence_length=prophage_len, features=local_feats)
+                        record.plot(ax=ax_genemap, with_ruler=False, strand_in_label_threshold=12)
+                        ax_genemap.set_xlim(0, max_prophage_len)
+                    else:
+                        ax_genemap.set_xticks([]); ax_genemap.set_yticks([])
+
                 else:
-                    ax_genemap.set_xticks([]); ax_genemap.set_yticks([])
+                    if DEBUG_GENEMAP and not (fe_max > start and fs_min < end):
+                        print(f"[GMAP] ABS coords but no overlap for {prophage_id!r} (key={used_key!r}); "
+                            f"window=({start},{end}), feat span=({fs_min},{fe_max}), n={len(feats)}")
+
+                    # absolute (contig) → clip to window and shift
+                    clipped = []
+                    for fs, fe, f in norm:
+                        if fe > start and fs < end:
+                            cs = max(fs, start)
+                            ce = min(fe, end)
+                            if ce > cs:
+                                clipped.append(
+                                    GraphicFeature(start=cs - start, end=ce - start,
+                                                strand=f.strand, color=f.color, label=f.label)
+                                )
+                    if clipped:
+                        record = GraphicRecord(sequence_length=prophage_len, features=clipped)
+                        record.plot(ax=ax_genemap, with_ruler=False, strand_in_label_threshold=12)
+                        ax_genemap.set_xlim(0, max_prophage_len)
+                    else:
+                        ax_genemap.set_xticks([]); ax_genemap.set_yticks([])
+
+            else:
+                if DEBUG_GENEMAP:
+                    print(f"[GMAP] No features for keys={lookups!r}")
+                ax_genemap.set_xticks([]); ax_genemap.set_yticks([])
+
         else:
-            # Example if you want to build from the functional TSV directly:
-            func_df = taxonomy_df  # (placeholder; use the actual functional-annotation DataFrame)
-            func_df = func_df[func_df["genome"] == prophage_id]
-            allowed_genes = {"TerL","portal","MCP","Ttub","Tstab","primase","PolB","PolA","DnaB"}
-            plot_genomic_map(ax_genemap, func_df, start, end, allowed_genes)
-            ax_genemap.set_xlim(0, max_prophage_len)
+            ax_genemap.set_xticks([]); ax_genemap.set_yticks([])
 
 
     # Titles
