@@ -540,16 +540,29 @@ def merge_prophage_with_taxonomy(
 
 
 def create_gridspec_axes(n_rows: int) -> Tuple[plt.Figure, Dict[str, List[plt.Axes]]]:
-    # a touch wider; genemap also wide
-    fig = plt.figure(figsize=(50, n_rows * 0.55))
-    # columns: barplot | family | class | order | taxonomy | genemap
-    gs = fig.add_gridspec(
-        n_rows, 6,
+    # Increase figure height significantly to accommodate legend space
+    fig = plt.figure(figsize=(50, n_rows * 0.7 + 2))  # Added +2 inches for legend space
+    
+    # Create main grid with space for legends
+    gs = gridspec.GridSpec(
+        n_rows + 1, 6,  # +1 row for legends
         width_ratios=[20, 1.2, 1.2, 1.2, 12, 70],
-        wspace=0.05
+        wspace=0.05,
+        height_ratios=[1]*n_rows + [0.6],  # Increased last row height for legends
+        hspace=0.2  # Increased vertical spacing
     )
 
-    axes = {"barplot": [], "family": [], "class": [], "order": [], "taxonomy": [], "genemap": []}
+    axes = {
+        "barplot": [], 
+        "family": [], 
+        "class": [], 
+        "order": [], 
+        "taxonomy": [], 
+        "genemap": [],
+        "legend": None
+    }
+    
+    # Create main content axes
     for i in range(n_rows):
         axes["barplot"].append(fig.add_subplot(gs[i, 0]))
         axes["family"].append(fig.add_subplot(gs[i, 1], sharey=axes["barplot"][i]))
@@ -557,6 +570,11 @@ def create_gridspec_axes(n_rows: int) -> Tuple[plt.Figure, Dict[str, List[plt.Ax
         axes["order"].append(fig.add_subplot(gs[i, 3], sharey=axes["barplot"][i]))
         axes["taxonomy"].append(fig.add_subplot(gs[i, 4], sharey=axes["barplot"][i]))
         axes["genemap"].append(fig.add_subplot(gs[i, 5], sharey=axes["barplot"][i]))
+    
+    # Create legend axis (spanning all columns in last row)
+    axes["legend"] = fig.add_subplot(gs[n_rows, :])
+    axes["legend"].axis('off')
+    
     return fig, axes
 
 
@@ -797,38 +815,63 @@ def plot_prophage_positions(
             ax_genemap.set_xticks([]); ax_genemap.set_yticks([])
 
 
-    # Titles
+    # Titles (adjust pad if needed)
     axes_dict["barplot"][0].set_title(
         "Prophage coordinates in bacterial contigs, bp",
-        fontsize=TITLE_FONTSIZE
-        )
+        fontsize=TITLE_FONTSIZE, pad=20  # Increased pad
+    )
     axes_dict["taxonomy"][0].set_title(
         "Taxonomy lineage",
-        fontsize=TITLE_FONTSIZE
+        fontsize=TITLE_FONTSIZE, pad=20  # Increased pad
     )
     axes_dict["genemap"][0].set_title(
         "Prophage genomic map",
-        fontsize=TITLE_FONTSIZE
-)
+        fontsize=TITLE_FONTSIZE, pad=20  # Increased pad
+    )
 
-    # Order legend (ONLY orders present on this plot)
-    # Order legend
-    # Order legend (right bottom)
+    # Adjust the figure size first (if needed)
+    fig.set_size_inches(fig.get_size_inches()[0], fig.get_size_inches()[1] * 1.2)  # Increase height
+
+    # === LEGENDS ===
+    # Create legend handles
     order_handles = [mpatches.Patch(color=order_color_map[o], label=o) for o in sorted(order_color_map)]
-    leg1 = fig.legend(order_handles, [h.get_label() for h in order_handles],
-                    ncol=4, loc="lower right", bbox_to_anchor=(1.0, -0.01),
-                    frameon=False, fontsize=TEXT_FONTSIZE, title="Bacterial order")
-
-    # Class legend (left bottom)
     class_handles = [mpatches.Patch(color=class_color_map[c], label=c) for c in sorted(class_color_map)]
-    leg2 = fig.legend(class_handles, [h.get_label() for h in class_handles],
-                    ncol=4, loc="lower left", bbox_to_anchor=(0.0, -0.01),
-                    frameon=False, fontsize=TEXT_FONTSIZE, title="Bacterial class")
 
-    fig.tight_layout(rect=[0.2, 0.1, 1, 0.90])  # Adjust as needed
-    # plt.subplots_adjust(top=0.92, bottom=0.15)
+    # Position legends in the dedicated space
+    leg1 = axes_dict["legend"].legend(
+        order_handles, [h.get_label() for h in order_handles],
+        ncol=min(4, len(order_handles)),
+        loc='lower left', 
+        bbox_to_anchor=(0, 0.5),  # Left side
+        frameon=False, 
+        fontsize=TEXT_FONTSIZE,
+        title="Bacterial order",
+        title_fontsize=TEXT_FONTSIZE
+    )
 
-    fig.canvas.draw()  # ensure positions are up to date
+    leg2 = axes_dict["legend"].legend(
+        class_handles, [h.get_label() for h in class_handles],
+        ncol=min(4, len(class_handles)),
+        loc='lower right', 
+        bbox_to_anchor=(1, 0.5),  # Right side
+        frameon=False, 
+        fontsize=TEXT_FONTSIZE,
+        title="Bacterial class",
+        title_fontsize=TEXT_FONTSIZE
+    )
+
+    # Add both legends to the axis
+    axes_dict["legend"].add_artist(leg1)
+    axes_dict["legend"].add_artist(leg2)
+
+    # Adjust layout with more space at bottom
+    plt.subplots_adjust(
+        bottom=0.15,  # Increased bottom space
+        top=0.95,
+        hspace=0.2
+    )
+
+    fig.canvas.draw()
 
     adjust_left_margin_for_labels(fig, axes_dict["barplot"])
 
@@ -839,63 +882,13 @@ def plot_prophage_positions(
     ]:
         bbox = ax.get_position()
         x_mid = bbox.x0 + bbox.width / 2.0
-        y_top = bbox.y1 + 0.01
+        y_top = bbox.y1 + 0.02  # Increased offset
         fig.text(x_mid, y_top, label, rotation=90, ha="center", va="bottom",
                 fontsize=TITLE_FONTSIZE, clip_on=False)
 
-    plt.savefig(output_file, dpi=300)
-    plt.savefig(Path(output_file).with_suffix(".svg"))
+    plt.savefig(output_file, dpi=300, bbox_inches='tight', pad_inches=0.5)  # Added pad_inches
+    plt.savefig(Path(output_file).with_suffix(".svg"), bbox_inches='tight', pad_inches=0.5)
     plt.close()
-
-
-# def add_taxonomy_subplot(
-#     fig: plt.Figure,
-#     ax_main: plt.Axes,
-#     genome_ids: List[str],
-#     taxonomies: List[str],
-#     subplot_width: float = 0.25
-# ) -> plt.Axes:
-#     """
-#     Add a new subplot to the right showing taxonomy info for each genome.
-
-#     Args:
-#         fig: The main matplotlib figure.
-#         ax_main: The main axis (e.g., barplot).
-#         genome_ids: List of genome IDs (y-axis positions).
-#         taxonomies: List of corresponding taxonomy strings.
-#         subplot_width: Fractional width of the subplot (e.g. 0.25 = 25% of total).
-#     Returns:
-#         ax_taxonomy: New subplot axis.
-#     """
-#     # from matplotlib import gridspec
-
-#     # Get position of main axis
-#     bbox = ax_main.get_position()
-#     total_width = bbox.width + subplot_width
-#     fig.clear()
-
-#     # Setup new grid
-#     gs = fig.add_gridspec(1, 2, width_ratios=[bbox.width, subplot_width], wspace=0.05)
-#     ax_main_new = fig.add_subplot(gs[0, 0])
-#     ax_taxonomy = fig.add_subplot(gs[0, 1], sharey=ax_main_new)
-
-#     # Re-plot the main plot if needed
-#     # (optional: you might want to pass drawing code here again)
-
-#     # Plot taxonomy text
-#     ax_taxonomy.set_xlim(0, 1)
-#     ax_taxonomy.set_xticks([])
-#     ax_taxonomy.set_yticks([])
-
-#     for i, (gid, tax) in enumerate(zip(genome_ids, taxonomies)):
-#         if pd.isna(tax):
-#             tax = "NA"
-#         ax_taxonomy.text(0, i, tax, va='center', ha='left', fontsize=8, clip_on=True)
-
-#     ax_taxonomy.set_title("Taxonomy", fontsize=10)
-#     ax_taxonomy.invert_yaxis()  # Align with main plot
-#     return ax_taxonomy
-
 
 
 def parse_itol_annotation(file_path: Path) -> Tuple[Dict[str, str], Dict[str, str], Set[str]]:
