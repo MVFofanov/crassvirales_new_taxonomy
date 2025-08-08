@@ -541,20 +541,21 @@ def merge_prophage_with_taxonomy(
 
 def create_gridspec_axes(n_rows: int) -> Tuple[plt.Figure, Dict[str, List[plt.Axes]]]:
     # Increase figure height significantly to accommodate legend space
-    fig = plt.figure(figsize=(50, n_rows * 0.7 + 2))  # Added +2 inches for legend space
+    fig = plt.figure(figsize=(50, n_rows * 0.7 + 2))  # +2 inches for legends
     
-    # Create main grid with space for legends
+    # columns: barplot | family | origin | class | order | taxonomy | genemap
     gs = gridspec.GridSpec(
-        n_rows + 1, 6,  # +1 row for legends
-        width_ratios=[20, 1.2, 1.2, 1.2, 12, 70],
+        n_rows + 1, 7,  # +1 row for legends
+        width_ratios=[20, 1.2, 1.2, 1.2, 1.2, 12, 70],
         wspace=0.05,
-        height_ratios=[1]*n_rows + [0.6],  # Increased last row height for legends
-        hspace=0.2  # Increased vertical spacing
+        height_ratios=[1]*n_rows + [0.6],  # last row for legends
+        hspace=0.2
     )
 
     axes = {
         "barplot": [], 
         "family": [], 
+        "is_mag": [],   # NEW
         "class": [], 
         "order": [], 
         "taxonomy": [], 
@@ -566,10 +567,11 @@ def create_gridspec_axes(n_rows: int) -> Tuple[plt.Figure, Dict[str, List[plt.Ax
     for i in range(n_rows):
         axes["barplot"].append(fig.add_subplot(gs[i, 0]))
         axes["family"].append(fig.add_subplot(gs[i, 1], sharey=axes["barplot"][i]))
-        axes["class"].append(fig.add_subplot(gs[i, 2], sharey=axes["barplot"][i]))
-        axes["order"].append(fig.add_subplot(gs[i, 3], sharey=axes["barplot"][i]))
-        axes["taxonomy"].append(fig.add_subplot(gs[i, 4], sharey=axes["barplot"][i]))
-        axes["genemap"].append(fig.add_subplot(gs[i, 5], sharey=axes["barplot"][i]))
+        axes["is_mag"].append(fig.add_subplot(gs[i, 2], sharey=axes["barplot"][i]))   # NEW
+        axes["class"].append(fig.add_subplot(gs[i, 3], sharey=axes["barplot"][i]))
+        axes["order"].append(fig.add_subplot(gs[i, 4], sharey=axes["barplot"][i]))
+        axes["taxonomy"].append(fig.add_subplot(gs[i, 5], sharey=axes["barplot"][i]))
+        axes["genemap"].append(fig.add_subplot(gs[i, 6], sharey=axes["barplot"][i]))
     
     # Create legend axis (spanning all columns in last row)
     axes["legend"] = fig.add_subplot(gs[n_rows, :])
@@ -607,6 +609,12 @@ def plot_prophage_positions(
 
     n = len(ordered_prophage_dict)
     fig, axes_dict = create_gridspec_axes(n)
+
+    # Color map for origin (Isolate vs MAG)
+    origin_color_map = {
+        "Isolate": "#d62728",  # red
+        "MAG":     "#1f77b4"   # blue
+    }
 
     # Build order colors only for what we actually plot
     contig_order_map, order_color_map = build_order_maps_for_contigs(
@@ -704,6 +712,22 @@ def plot_prophage_positions(
                                             transform=ax_fam.transAxes,
                                             fill=False, edgecolor="black", linewidth=0.4))
         
+        # 2.5) Origin box (Isolate/MAG)
+        ax_mag = axes_dict["is_mag"][i]  # NEW origin axis
+
+        origin_raw = prophage_info.get("is_mag", "")  # column name as you wrote it
+        origin = str(origin_raw).strip()
+        origin_color = origin_color_map.get(origin, DEFAULT_COLOR)
+
+        ax_mag.set_xlim(0, 1); ax_mag.set_ylim(0, 1)
+        ax_mag.set_xticks([]); ax_mag.set_yticks([])
+        ax_mag.patch.set_facecolor(origin_color)
+        ax_mag.add_patch(
+            mpatches.Rectangle((0, 0), 1, 1,
+                            transform=ax_mag.transAxes,
+                            fill=False, edgecolor="black", linewidth=0.4)
+)
+        
         # 3) Class box (NEW)
         class_name = contig_class_map.get(contig_id, "unknown")
         cls_color = class_color_map.get(class_name, DEFAULT_COLOR)
@@ -723,7 +747,7 @@ def plot_prophage_positions(
         ax_ord.add_patch(mpatches.Rectangle((0, 0), 1, 1,
                                             transform=ax_ord.transAxes,
                                             fill=False, edgecolor="black", linewidth=0.4))
-
+        
         # 5) Taxonomy text
         ax_tax.text(0, 0.4, taxonomy_labels[i], fontsize=10, va='center', ha='left')
         ax_tax.set_xlim(0, 1); ax_tax.set_xticks([]); ax_tax.set_yticks([])
@@ -860,9 +884,26 @@ def plot_prophage_positions(
         title_fontsize=TEXT_FONTSIZE
     )
 
+    # === Add origin legend (Isolate/MAG) ===
+    origin_handles = [
+        mpatches.Patch(color=origin_color_map["Isolate"], label="Isolate"),
+        mpatches.Patch(color=origin_color_map["MAG"], label="MAG"),
+    ]
+    leg3 = axes_dict["legend"].legend(
+        origin_handles, [h.get_label() for h in origin_handles],
+        ncol=2,
+        loc='lower center',
+        bbox_to_anchor=(0.5, 0.05),  # middle bottom of the legend band
+        frameon=False,
+        fontsize=TEXT_FONTSIZE,
+        title="Genome origin",
+        title_fontsize=TEXT_FONTSIZE
+    )
+
     # Add both legends to the axis
     axes_dict["legend"].add_artist(leg1)
     axes_dict["legend"].add_artist(leg2)
+    axes_dict["legend"].add_artist(leg3)
 
     # Adjust layout with more space at bottom
     plt.subplots_adjust(
@@ -877,12 +918,13 @@ def plot_prophage_positions(
 
     for ax, label in [
         (axes_dict["family"][0], "Crassvirales family"),
+        (axes_dict["is_mag"][0], "Genome origin"),         # NEW
         (axes_dict["class"][0],  "Bacterial class"),
         (axes_dict["order"][0],  "Bacterial order"),
     ]:
         bbox = ax.get_position()
         x_mid = bbox.x0 + bbox.width / 2.0
-        y_top = bbox.y1 + 0.02  # Increased offset
+        y_top = bbox.y1 + 0.02
         fig.text(x_mid, y_top, label, rotation=90, ha="center", va="bottom",
                 fontsize=TITLE_FONTSIZE, clip_on=False)
 
@@ -1071,7 +1113,7 @@ def main():
     crassus_phylogeny = f"{crassus_output}/5_phylogenies/3_iToL"
     tree_file = Path(f"{crassus_phylogeny}/TerL_iToL_renamed.nwk")
     itol_annotation = Path(f"{crassus_phylogeny}/TerL_iToL.txt")
-    prophage_table = Path(f"{wd}/prophage_alignments_ncbi_and_gtdb_samtools_coordinates_edited_with_lengths.tsv")
+    prophage_table = Path(f"{wd}/prophage_alignments_ncbi_and_gtdb_samtools_coordinates_edited_with_lengths_and_mags.tsv")
     taxonomy_file = Path(f"{wd}/prophage_alignments_ncbi_and_gtdb_samtools_coordinates_edited_with_lengths_bacterial_contig_ids_taxonomy.tsv")
     functional_annotation_file = Path(f"{crassus_output}/4_ORF/3_functional_annot_table_renamed.tsv")
 
