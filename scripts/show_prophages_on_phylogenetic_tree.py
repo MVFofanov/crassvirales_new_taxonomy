@@ -460,10 +460,39 @@ def plot_prophage_positions(
         y_labels.append(full_label)
 
         # 1) Contig bar (shared max scale so widths differ across rows)
-        ax_bar.broken_barh([(0, contig_length)], (0, 0.8), facecolors='lightgrey')
-        ax_bar.broken_barh([(start, end - start)], (0, 0.8), facecolors='red')
+        # ax_bar.broken_barh([(0, contig_length)], (0, 0.8), facecolors='lightgrey')
+        # ax_bar.broken_barh([(start, end - start)], (0, 0.8), facecolors='red')
+        # --- Contig bar (fill full subplot height; width is true scale) ---
+        # Lock vertical axis to [0, 1] so a height=1 bar fills the subplot.
+        # --- Contig bar (full subplot height in Axes coordinates) ---
         ax_bar.set_xlim(0, max_contig_len)
-        ax_bar.set_yticks([]); ax_bar.set_xticks([])
+        ax_bar.set_ylim(0, 1)  # Axes coords in Y
+
+        # Clear ticks
+        ax_bar.set_yticks([])
+        ax_bar.set_xticks([])
+
+        # Background bar (full contig length, full subplot height)
+        ax_bar.add_patch(mpatches.Rectangle(
+            (0, 0),                # x, y
+            contig_length,         # width in data coords
+            1,                     # height in Axes coords
+            transform=ax_bar.get_xaxis_transform(),  # lock height to Axes
+            facecolor='lightgrey',
+            edgecolor='none'
+        ))
+
+        # Prophage interval
+        ax_bar.add_patch(mpatches.Rectangle(
+            (start, 0),
+            end - start,
+            1,
+            transform=ax_bar.get_xaxis_transform(),
+            facecolor='red',
+            edgecolor='none'
+        ))
+
+        # Label
         ax_bar.set_ylabel(full_label, fontsize=6, ha='right', rotation=0)
 
         # 2) Family box  (fills entire mini-axis)
