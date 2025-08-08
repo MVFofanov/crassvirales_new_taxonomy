@@ -563,8 +563,8 @@ def plot_prophage_positions(
 
     # Titles
     axes_dict["barplot"][0].set_title("Prophage positions in contigs")
-    axes_dict["family"][0].set_title("Crassvirales family")
-    axes_dict["order"][0].set_title("Bacterial order")
+    # axes_dict["family"][0].set_title("Crassvirales family")
+    # axes_dict["order"][0].set_title("Bacterial order")
     axes_dict["taxonomy"][0].set_title("Taxonomy")
     axes_dict["genemap"][0].set_title("Genomic map (prophage)")
 
@@ -573,6 +573,25 @@ def plot_prophage_positions(
     fig.legend(handles=handles, ncol=4, loc="lower center", bbox_to_anchor=(0.5, -0.01), frameon=False, fontsize=8)
 
     fig.tight_layout(rect=[0, 0.05, 1, 1])  # leave space for legend
+
+    fig.canvas.draw()  # ensure positions are up to date
+
+    for ax, label in [
+        (axes_dict["family"][0], "Crassvirales family"),
+        (axes_dict["order"][0],  "Bacterial order"),
+    ]:
+        # Get the axis box in figure coords
+        bbox = ax.get_position()
+        x_mid = bbox.x0 + bbox.width / 2.0
+        y_top = bbox.y1 + 0.01  # a tiny margin above the axes
+
+        # Draw rotated text at the column center
+        fig.text(
+            x_mid, y_top, label,
+            rotation=90, ha="center", va="bottom",
+            fontsize=10, clip_on=False
+        )
+
     plt.savefig(output_file, dpi=300)
     plt.savefig(Path(output_file).with_suffix(".svg"))
     plt.close()
