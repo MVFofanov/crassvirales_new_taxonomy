@@ -403,13 +403,13 @@ def merge_prophage_with_taxonomy(
 
 def create_gridspec_axes(n_rows: int) -> Tuple[plt.Figure, Dict[str, List[plt.Axes]]]:
     # Increase width (20 → 24) and row height multiplier (0.45 → 0.55)
-    fig = plt.figure(figsize=(24, n_rows * 0.55))
+    fig = plt.figure(figsize=(30, n_rows * 0.55))
 
     # columns: barplot | family | order | taxonomy | genemap
     gs = fig.add_gridspec(
         n_rows,
         5,
-        width_ratios=[10, 1.2, 1.2, 12, 15],  # slightly wider family/order
+        width_ratios=[20, 1.2, 1.2, 12, 40],  # slightly wider family/order
         wspace=0.05
     )
 
@@ -558,7 +558,7 @@ def plot_prophage_positions(
         ax_tax.set_xlim(0, 1); ax_tax.set_xticks([]); ax_tax.set_yticks([])
 
         # 5) Genomic map (handle absolute vs local coords + debug + fallbacks)
-        DEBUG_GENEMAP = True  # set True to print diagnostics
+        DEBUG_GENEMAP = False  # set True to print diagnostics
 
         if feature_dict is not None:
             # --- try several keys ---
