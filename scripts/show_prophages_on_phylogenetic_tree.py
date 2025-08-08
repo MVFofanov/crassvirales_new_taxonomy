@@ -7,7 +7,7 @@ import re
 from typing import Dict, Tuple, List, Set, Optional
 from ete3 import Tree, TreeStyle, NodeStyle, RectFace, faces, TextFace, Face, NCBITaxa
 import matplotlib
-from matplotlib import gridspec
+from matplotlib import gridspec, transforms
 from matplotlib.axes import Axes
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -33,6 +33,24 @@ except Exception:
 
 def read_tree(tree_file: Path) -> Tree:
     return Tree(str(tree_file), format=1)
+
+def adjust_left_margin_for_labels(fig, ax_bar_list):
+    renderer = fig.canvas.get_renderer()
+    max_label_width = 0
+    for ax in ax_bar_list:
+        labels = [lab.get_text() for lab in ax.get_yticklabels()] + [ax.get_ylabel()]
+        for label in labels:
+            if label:
+                t = ax.text(0, 0, label)
+                bbox = t.get_window_extent(renderer=renderer)
+                max_label_width = max(max_label_width, bbox.width)
+                t.remove()
+    # Convert width in pixels to figure fraction
+    fig_width_inch = fig.get_size_inches()[0]
+    dpi = fig.dpi
+    margin_frac = max_label_width / (fig_width_inch * dpi)
+    # Adjust left margin
+    fig.subplots_adjust(left=margin_frac + 0.02)  # small padding
 
 def load_functional_annotation(path: str) -> Dict[str, List[GraphicFeature]]:
     import pandas as pd
@@ -384,9 +402,16 @@ def merge_prophage_with_taxonomy(
 
 
 def create_gridspec_axes(n_rows: int) -> Tuple[plt.Figure, Dict[str, List[plt.Axes]]]:
-    fig = plt.figure(figsize=(20, n_rows * 0.45))
+    # Increase width (20 → 24) and row height multiplier (0.45 → 0.55)
+    fig = plt.figure(figsize=(24, n_rows * 0.55))
+
     # columns: barplot | family | order | taxonomy | genemap
-    gs = fig.add_gridspec(n_rows, 5, width_ratios=[10, 1, 1, 12, 15], wspace=0.05)
+    gs = fig.add_gridspec(
+        n_rows,
+        5,
+        width_ratios=[10, 1.2, 1.2, 12, 15],  # slightly wider family/order
+        wspace=0.05
+    )
 
     axes = {"barplot": [], "family": [], "order": [], "taxonomy": [], "genemap": []}
     for i in range(n_rows):
@@ -395,6 +420,7 @@ def create_gridspec_axes(n_rows: int) -> Tuple[plt.Figure, Dict[str, List[plt.Ax
         axes["order"].append(fig.add_subplot(gs[i, 2], sharey=axes["barplot"][i]))
         axes["taxonomy"].append(fig.add_subplot(gs[i, 3], sharey=axes["barplot"][i]))
         axes["genemap"].append(fig.add_subplot(gs[i, 4], sharey=axes["barplot"][i]))
+
     return fig, axes
 
 
@@ -572,9 +598,11 @@ def plot_prophage_positions(
     handles = [mpatches.Patch(color=order_color_map[o], label=o) for o in sorted(order_color_map)]
     fig.legend(handles=handles, ncol=4, loc="lower center", bbox_to_anchor=(0.5, -0.01), frameon=False, fontsize=8)
 
-    fig.tight_layout(rect=[0, 0.05, 1, 1])  # leave space for legend
+    fig.tight_layout(rect=[0.2, 0.08, 1, 1])  # increase left from 0.0 → 0.12
 
     fig.canvas.draw()  # ensure positions are up to date
+
+    adjust_left_margin_for_labels(fig, axes_dict["barplot"])
 
     for ax, label in [
         (axes_dict["family"][0], "Crassvirales family"),
