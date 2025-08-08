@@ -3,13 +3,17 @@
 from collections import OrderedDict
 import os
 from pathlib import Path
+import re
 from typing import Dict, Tuple, List, Set, Optional
-from ete3 import Tree, TreeStyle, NodeStyle, RectFace, faces, TextFace, Face
+from ete3 import Tree, TreeStyle, NodeStyle, RectFace, faces, TextFace, Face, NCBITaxa
 import matplotlib
+from matplotlib import gridspec
 from matplotlib.axes import Axes
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import pandas as pd
+
+from PyQt5.QtGui import QPainter, QColor
 
 from dna_features_viewer import GraphicFeature, GraphicRecord
 
@@ -18,6 +22,14 @@ import textwrap
 matplotlib.use('Agg')
 os.environ["QT_QPA_PLATFORM"] = "offscreen"  # Ensure Qt offscreen rendering
 
+ORDER_LIKE = re.compile(r".*ales$", re.IGNORECASE)
+
+# top-level (after imports)
+try:
+    _NCBI = NCBITaxa()
+except Exception:
+    _NCBI = None
+
 
 def read_tree(tree_file: Path) -> Tree:
     return Tree(str(tree_file), format=1)
@@ -25,59 +37,242 @@ def read_tree(tree_file: Path) -> Tree:
 def load_functional_annotation(path: str) -> Dict[str, List[GraphicFeature]]:
     import pandas as pd
     df = pd.read_csv(path, sep="\t")
-    features_by_genome = {}
+    features_by_genome: Dict[str, List[GraphicFeature]] = {}
 
-    allowed = {
-        "TerL", "portal", "MCP", "Ttub", "Tstab",
-        "primase", "PolB", "PolA", "DnaB"
-    }
+    allowed = {"TerL", "portal", "MCP", "Ttub", "Tstab", "primase", "PolB", "PolA", "DnaB"}
 
     for _, row in df.iterrows():
-        genome = row["genome"]
+        genome = str(row["genome"])
         start = int(row["start"])
         end = int(row["end"])
-        strand = 1 if row["strand"] == "+" else -1
-        raw_label = row.get("yutin", "")
-        label = str(raw_label).strip() if pd.notna(raw_label) else None
+        strand = 1 if str(row["strand"]).strip() == "+" else -1
 
-        if label in allowed:
-            color = "red"
-            feature_label = label
-        else:
-            color = "gray"
-            feature_label = None  # suppress label
+        yutin_raw = row.get("yutin", None)
+        yutin = (str(yutin_raw).strip() if pd.notna(yutin_raw) else "")
 
-        feature = GraphicFeature(start=start, end=end, strand=strand, color=color, label=feature_label)
-        features_by_genome.setdefault(genome, []).append(feature)
+        # color: red only if yutin present, else lightgrey
+        color = "red" if yutin else "lightgrey"
+        # label: only for allowed markers
+        label = yutin if yutin in allowed else None
 
+        features_by_genome.setdefault(genome, []).append(
+            GraphicFeature(
+                start=start,
+                end=end,
+                strand=strand,
+                color=color,
+                label=label
+            )
+        )
     return features_by_genome
 
 
-def plot_genomic_maps_on_subplot(
-    ax: Axes,
-    y_positions: List[int],
-    prophage_ids: List[str],
-    feature_dict: Dict[str, List[GraphicFeature]],
-    height: float = 0.8
-) -> None:
-    matched = 0
-    for y, prophage_id in zip(y_positions, prophage_ids):
-        features = feature_dict.get(prophage_id)
-        if not features:
-            continue
-        matched += 1
-        sequence_length = max(f.end for f in features) + 100
-        record = GraphicRecord(sequence_length=sequence_length, features=features)
-        record.plot(ax=ax, with_ruler=False, strand_in_label_threshold=7)
+def _split_taxonomy_string(tax: str) -> List[str]:
+    if not isinstance(tax, str) or not tax.strip():
+        return []
+    toks = [t.strip() for t in tax.split(";") if t.strip()]
+    # drop “environmental samples”
+    return [t for t in toks if t.lower() != "environmental samples"]
 
-    ax.set_xlim(0, 100000)
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_title("Genomic map", fontsize=10)
-    ax.invert_yaxis()
+def _try_ncbi_order(tokens: List[str]) -> Optional[str]:
+    if _NCBI is None:
+        return None
+    try:
+        name2tax = _NCBI.get_name_translator(tokens)  # {name: [taxid]}
+        if not name2tax:
+            return None
+        # build ranks in one go (fewer DB hits)
+        taxids = [name2tax[t][0] for t in tokens if t in name2tax]
+        ranks = _NCBI.get_rank(taxids)  # {taxid: rank}
+        rev = {v: k for k, v in name2tax.items()}  # not reliable; better iterate
+        for tok in tokens:
+            tids = name2tax.get(tok)
+            if not tids:
+                continue
+            taxid = tids[0]
+            if ranks.get(taxid) == "order":
+                return tok
+    except Exception:
+        return None
+    return None
 
-    if matched == 0:
-        print("⚠️ No genomic maps were drawn. Check if feature_dict keys match the prophage IDs.")
+def _heuristic_order(tokens: List[str]) -> Optional[str]:
+    # pick first token that looks like an order (…ales)
+    for tok in tokens:
+        if ORDER_LIKE.match(tok):
+            return tok
+    return None
+
+def _pick_suffix(tokens: List[str], suffixes: Tuple[str, ...]) -> Optional[str]:
+    for tok in tokens:
+        if tok.endswith(suffixes):
+            return tok
+    return None
+
+def extract_order_with_fallback(taxonomy: str) -> Tuple[str, str]:
+    """
+    Returns (used_rank, name) where used_rank ∈ {'order','class','phylum','family','unknown'}
+    Priority: NCBITaxa (order) → heuristic order → class → phylum → family → Unknown
+    """
+    tokens = _split_taxonomy_string(taxonomy)
+    if not tokens:
+        return "unknown", "Unknown"
+
+    # 1) NCBITaxa first
+    ord_name = _try_ncbi_order(tokens)
+    if ord_name:
+        return "order", ord_name
+
+    # 2) Heuristic (…ales)
+    ord_name = _heuristic_order(tokens)
+    if ord_name:
+        return "order", ord_name
+
+    # 3) Fallbacks by common suffixes
+    cls = _pick_suffix(tokens, ("ia", "bia", "illi", "idia", "eria"))  # includes Bacilli       # Clostridia, Halobacteria
+    if cls: return "class", cls
+    phyl = _pick_suffix(tokens, ("ota", "otae"))      # Bacillota, Bacteroidota
+    if phyl: return "phylum", phyl
+    fam = _pick_suffix(tokens, ("aceae",))            # Lachnospiraceae
+    if fam: return "family", fam
+
+    return "unknown", "Unknown"
+
+# def build_order_color_map(unique_orders: list) -> dict:
+#     """Assign distinct colors to orders, keeping 'unknown' grey."""
+#     import itertools
+#     color_cycle = itertools.cycle(plt.cm.tab20.colors)
+#     order_to_color = {}
+#     for order in sorted(unique_orders):
+#         if order.lower() == "unknown":
+#             order_to_color[order] = "lightgrey"
+#         else:
+#             order_to_color[order] = next(color_cycle)
+#     return order_to_color
+
+
+def build_order_maps_for_contigs(
+    taxonomy_df: pd.DataFrame,
+    contig_ids_to_plot: List[str],
+    accession_col: str = "accession",
+    taxonomy_col: str = "taxonomy"
+) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """
+    Returns:
+      contig_order_map: contig_id -> order_name_or_fallback
+      order_color_map:  order_name -> color  (only for orders PRESENT in contig_ids_to_plot)
+    """
+
+    # === fixed order → color mapping ===
+    fixed_order_color_map: Dict[str, str] = {
+        'Acholeplasmatales': '#1f77b4',
+        'Bacillales': '#aec7e8',
+        'Bacteria': '#ff7f0e',
+        'Bdellovibrionales': '#ffbb78',
+        'Candidatus Borrarchaeota': '#2ca02c',
+        'Candidatus Pacearchaeota': '#98df8a',
+        'Chitinophagales': '#d62728',
+        'Cytophagales': '#ff9896',
+        'Erysipelotrichales': '#9467bd',
+        'Eubacteriales': '#c5b0d5',
+        'Halobacteriales': '#8c564b',
+        'Lachnospirales': '#c49c94',
+        'Methanobacteriales': '#e377c2',
+        'Peptostreptococcales': '#f7b6d2',
+        'Rickettsiales': '#7f7f00',
+        'Vampirovibrionales': '#bcbd22',
+    }
+
+    contig_order_map: Dict[str, str] = {}
+    seen_orders: List[str] = []
+
+    tax_by_acc = dict(zip(taxonomy_df[accession_col].astype(str),
+                          taxonomy_df[taxonomy_col].astype(str)))
+
+    for contig_id in contig_ids_to_plot:
+        tax = tax_by_acc.get(str(contig_id), "")
+        _, ord_name = extract_order_with_fallback(tax)
+        contig_order_map[str(contig_id)] = ord_name
+        seen_orders.append(ord_name)
+
+    unique_orders = sorted(set(seen_orders))
+
+    # === build final color map ===
+    order_color_map: Dict[str, str] = {}
+    import itertools
+    color_cycle = itertools.cycle(plt.cm.tab20.colors)
+
+    for o in unique_orders:
+        if o.lower() == "unknown":
+            order_color_map[o] = "#999999"
+        elif o in fixed_order_color_map:
+            order_color_map[o] = fixed_order_color_map[o]
+        else:
+            # new order not in your mapping → assign next distinct color
+            order_color_map[o] = next(color_cycle)
+
+    print("\n🔶 Order → Color mapping (shown on plot):")
+    for o in unique_orders:
+        print(f"  '{o}': '{order_color_map[o]}',")
+    print()
+
+    return contig_order_map, order_color_map
+
+
+def plot_genomic_map(ax, features_df, prophage_start, prophage_end, allowed_genes):
+    prophage_len = max(1, prophage_end - prophage_start)
+    features = []
+    for _, row in features_df.iterrows():
+        gene = row.get("yutin", "")
+        if gene in allowed_genes:
+            color = "blue"
+        elif pd.notna(row.get("yutin")) and str(row["yutin"]).strip() != "":
+            color = "red"
+        else:
+            color = "lightgrey"
+
+        features.append(
+            GraphicFeature(
+                start=int(row["start"]) - prophage_start,
+                end=int(row["end"]) - prophage_start,
+                strand=1 if str(row["strand"]).strip() == "+" else -1,
+                color=color,
+                label=gene if gene in allowed_genes else None
+            )
+        )
+
+    record = GraphicRecord(sequence_length=prophage_len, features=features)
+    record.plot(ax=ax, with_ruler=False, strand_in_label_threshold=12)
+    ax.set_xlim(0, prophage_len)
+    ax.set_xticks([]); ax.set_yticks([])
+
+
+
+# def plot_genomic_maps_on_subplot(
+#     ax: Axes,
+#     y_positions: List[int],
+#     prophage_ids: List[str],
+#     feature_dict: Dict[str, List[GraphicFeature]],
+#     height: float = 0.8
+# ) -> None:
+#     matched = 0
+#     for y, prophage_id in zip(y_positions, prophage_ids):
+#         features = feature_dict.get(prophage_id)
+#         if not features:
+#             continue
+#         matched += 1
+#         sequence_length = max(f.end for f in features) + 100
+#         record = GraphicRecord(sequence_length=sequence_length, features=features)
+#         record.plot(ax=ax, with_ruler=False, strand_in_label_threshold=7)
+
+#     ax.set_xlim(0, 100000)
+#     ax.set_xticks([])
+#     ax.set_yticks([])
+#     ax.set_title("Genomic map", fontsize=10)
+#     ax.invert_yaxis()
+
+#     if matched == 0:
+#         print("⚠️ No genomic maps were drawn. Check if feature_dict keys match the prophage IDs.")
 
 
 def build_leaf_metadata(tree: Tree) -> Tuple[Dict[str, Dict[str, str]], Dict[str, str], Dict[str, str]]:
@@ -188,6 +383,21 @@ def merge_prophage_with_taxonomy(
     return merged_df
 
 
+def create_gridspec_axes(n_rows: int) -> Tuple[plt.Figure, Dict[str, List[plt.Axes]]]:
+    fig = plt.figure(figsize=(20, n_rows * 0.45))
+    # columns: barplot | family | order | taxonomy | genemap
+    gs = fig.add_gridspec(n_rows, 5, width_ratios=[10, 1, 1, 12, 15], wspace=0.05)
+
+    axes = {"barplot": [], "family": [], "order": [], "taxonomy": [], "genemap": []}
+    for i in range(n_rows):
+        axes["barplot"].append(fig.add_subplot(gs[i, 0]))
+        axes["family"].append(fig.add_subplot(gs[i, 1], sharey=axes["barplot"][i]))
+        axes["order"].append(fig.add_subplot(gs[i, 2], sharey=axes["barplot"][i]))
+        axes["taxonomy"].append(fig.add_subplot(gs[i, 3], sharey=axes["barplot"][i]))
+        axes["genemap"].append(fig.add_subplot(gs[i, 4], sharey=axes["barplot"][i]))
+    return fig, axes
+
+
 def plot_prophage_positions(
     tree: Tree,
     prophage_dict: Dict[str, Dict[str, str]],
@@ -198,195 +408,194 @@ def plot_prophage_positions(
     output_file: str,
     feature_dict: Optional[Dict[str, List[GraphicFeature]]] = None
 ) -> None:
-    from collections import OrderedDict
-
-    def create_gridspec_axes(n_rows: int) -> Tuple[plt.Figure, Dict[str, List[plt.Axes]]]:
-        fig = plt.figure(figsize=(20, n_rows * 0.45))
-        gs = fig.add_gridspec(n_rows, 4, width_ratios=[10, 1, 12, 15], wspace=0.05)
-
-        axes = {
-            "barplot": [],
-            "family": [],
-            "taxonomy": [],
-            "genemap": []
-        }
-
-        for i in range(n_rows):
-            axes["barplot"].append(fig.add_subplot(gs[i, 0]))
-            axes["family"].append(fig.add_subplot(gs[i, 1], sharey=axes["barplot"][i]))
-            axes["taxonomy"].append(fig.add_subplot(gs[i, 2], sharey=axes["barplot"][i]))
-            axes["genemap"].append(fig.add_subplot(gs[i, 3], sharey=axes["barplot"][i]))
-
-        return fig, axes
-
-    # === Order prophage dict based on tree leaf order ===
+    # === order rows by tree leaves ===
     leaf_order = [leaf.name for leaf in tree.iter_leaves()]
     ordered_prophage_dict = OrderedDict()
     taxonomy_labels = []
+    contigs_in_plot: List[str] = []
 
     for leaf_name in leaf_order:
         genome_id = match_genome_id(leaf_name)
         for contig_id, prophage in prophage_dict.items():
             if prophage.get("prophage_id", "").startswith(genome_id):
                 ordered_prophage_dict[contig_id] = prophage
-                tax_row = taxonomy_df[taxonomy_df["accession"] == contig_id]
+                contigs_in_plot.append(contig_id)
+                tax_row = taxonomy_df[taxonomy_df["accession"].astype(str) == str(contig_id)]
                 taxonomy = tax_row["taxonomy"].values[0] if not tax_row.empty else "NA"
                 taxonomy_labels.append(taxonomy)
                 break
 
-    # === Setup subplots ===
     n = len(ordered_prophage_dict)
     fig, axes_dict = create_gridspec_axes(n)
 
-    print("🔍 Genomic maps will be looked up for the following prophage_ids:")
-    for pid in [prophage["prophage_id"] for prophage in ordered_prophage_dict.values()][:5]:
-        print(f"   {pid}")
+    # Build order colors only for what we actually plot
+    contig_order_map, order_color_map = build_order_maps_for_contigs(
+        taxonomy_df, contigs_in_plot
+    )
+
+    # === global x-limits so widths vary across rows ===
+    contig_lengths = [int(p["contig_length"]) for p in ordered_prophage_dict.values()]
+    max_contig_len = max(contig_lengths) if contig_lengths else 1
+    prophage_lens = [int(p["end"]) - int(p["start"]) for p in ordered_prophage_dict.values()]
+    max_prophage_len = max(prophage_lens) if prophage_lens else 1
 
     y_labels = []
-
     for i, (contig_id, prophage_info) in enumerate(ordered_prophage_dict.items()):
         prophage_id = prophage_info["prophage_id"]
         start = int(prophage_info["start"])
         end = int(prophage_info["end"])
         contig_length = int(prophage_info["contig_length"])
+        prophage_len = max(1, end - start)
 
-        # === Label ===
+        ax_bar = axes_dict["barplot"][i]
+        ax_fam = axes_dict["family"][i]
+        ax_ord = axes_dict["order"][i]
+        ax_tax = axes_dict["taxonomy"][i]
+        ax_genemap = axes_dict["genemap"][i]
+
+        # label
         matching_leaf = leaf_metadata.get(prophage_id, {}).get("protein_id")
         base_label = f"{contig_id}\n{matching_leaf}" if matching_leaf else contig_id
         full_label = f"{prophage_id} && {base_label}"
         y_labels.append(full_label)
 
-        # === Axes ===
-        ax_bar = axes_dict["barplot"][i]
-        ax_fam = axes_dict["family"][i]
-        ax_tax = axes_dict["taxonomy"][i]
-        ax_genemap = axes_dict["genemap"][i]
-
-        # Barplot (full contig, red = prophage region)
+        # 1) Contig bar (shared max scale so widths differ across rows)
         ax_bar.broken_barh([(0, contig_length)], (0, 0.8), facecolors='lightgrey')
         ax_bar.broken_barh([(start, end - start)], (0, 0.8), facecolors='red')
-        ax_bar.set_xlim(0, contig_length)
-        ax_bar.set_yticks([])
-        ax_bar.set_xticks([])
+        ax_bar.set_xlim(0, max_contig_len)
+        ax_bar.set_yticks([]); ax_bar.set_xticks([])
         ax_bar.set_ylabel(full_label, fontsize=6, ha='right', rotation=0)
 
-        # Family color
+        # 2) Family box  (fills entire mini-axis)
+        # figure out the family for this row
         family = None
-        for leaf in leaf_to_family:
-            if leaf.startswith(prophage_id):
-                family = leaf_to_family[leaf]
-                break
-        if not family:
-            genome_id = prophage_id.split("|")[0]
-            match = next((l for l in leaf_to_family if genome_id in l), None)
-            if match:
-                family = leaf_to_family[match]
-        color = family_to_color.get(family, "#999999") if family else "#FFFFFF"
-        ax_fam.broken_barh([(0, 1)], (0, 0.8), facecolors=color)
-        ax_fam.set_xlim(0, 1)
-        ax_fam.set_xticks([])
-        ax_fam.set_yticks([])
+        if matching_leaf:
+            family = leaf_to_family.get(matching_leaf)
 
-        # Taxonomy
+        if family is None:
+            # fallback: match by genome prefix
+            genome_prefix = prophage_id.split("|")[0]
+            family = next(
+                (leaf_to_family[l] for l in leaf_to_family if l.startswith(genome_prefix)),
+                None
+            )
+
+        fam_color = family_to_color.get(family, "#999999") if family else "#FFFFFF"
+        ax_fam.set_xlim(0, 1); ax_fam.set_ylim(0, 1)
+        ax_fam.set_xticks([]); ax_fam.set_yticks([])
+        ax_fam.patch.set_facecolor(fam_color)  # full fill
+        ax_fam.add_patch(mpatches.Rectangle((0, 0), 1, 1,
+                                            transform=ax_fam.transAxes,
+                                            fill=False, edgecolor="black", linewidth=0.4))
+
+        # 3) Order box  (fills entire mini-axis)
+        order_name = contig_order_map.get(contig_id, "unknown")
+        ord_color = order_color_map.get(order_name, "#999999")
+        ax_ord.set_xlim(0, 1); ax_ord.set_ylim(0, 1)
+        ax_ord.set_xticks([]); ax_ord.set_yticks([])
+        ax_ord.patch.set_facecolor(ord_color)
+        ax_ord.add_patch(mpatches.Rectangle((0, 0), 1, 1,
+                                            transform=ax_ord.transAxes,
+                                            fill=False, edgecolor="black", linewidth=0.4))
+
+        # 4) Taxonomy text
         ax_tax.text(0, 0.4, taxonomy_labels[i], fontsize=7, va='center', ha='left')
-        ax_tax.set_xlim(0, 1)
-        ax_tax.set_xticks([])
-        ax_tax.set_yticks([])
+        ax_tax.set_xlim(0, 1); ax_tax.set_xticks([]); ax_tax.set_yticks([])
 
-        # Genomic map (only features within prophage region)
-        features = feature_dict.get(prophage_id)
-        if features:
-            filtered = [
-                f for f in features
-                if start <= f.start <= f.end <= end
-            ]
-            if filtered:
-                # Shift coordinates so prophage starts at 0
-                shifted = [
-                    GraphicFeature(
-                        start=f.start - start,
-                        end=f.end - start,
-                        strand=f.strand,
-                        color=f.color,
-                        label=f.label
-                    )
-                    for f in filtered
-                ]
-                sequence_length = max(f.end for f in shifted) + 100
-                record = GraphicRecord(sequence_length=sequence_length, features=shifted)
-                record.plot(
-                    ax=ax_genemap,
-                    with_ruler=False,
-                    strand_in_label_threshold=12
-                )
-                ax_genemap.set_xlim(0, sequence_length)
-            else:
-                ax_genemap.set_xticks([])
-                ax_genemap.set_yticks([])
+        # 5) Genomic map (dna_features_viewer) — shared max prophage scale
+        # Genomic map (prophage-only, true scale)
+        if feature_dict is not None:
+            # you’re using feature_dict (pre-built GraphicFeatures), which is fine;
+            # but if you want to use the raw table instead, filter the DF and call plot_genomic_map().
+            # Example using your pre-built dict:
+            feats = feature_dict.get(prophage_id)
+            if feats:
+                filtered = [f for f in feats if (start <= f.start <= f.end <= end)]
+                if filtered:
+                    shifted = [
+                        GraphicFeature(
+                            start=f.start - start, end=f.end - start,
+                            strand=f.strand, color=f.color, label=f.label
+                        ) for f in filtered
+                    ]
+                    record = GraphicRecord(sequence_length=prophage_len, features=shifted)
+                    record.plot(ax=ax_genemap, with_ruler=False, strand_in_label_threshold=12)
+                    ax_genemap.set_xlim(0, max_prophage_len)  # or prophage_len if you prefer per-row scaling
+                else:
+                    ax_genemap.set_xticks([]); ax_genemap.set_yticks([])
         else:
-            ax_genemap.set_xticks([])
-            ax_genemap.set_yticks([])
+            # Example if you want to build from the functional TSV directly:
+            func_df = taxonomy_df  # (placeholder; use the actual functional-annotation DataFrame)
+            func_df = func_df[func_df["genome"] == prophage_id]
+            allowed_genes = {"TerL","portal","MCP","Ttub","Tstab","primase","PolB","PolA","DnaB"}
+            plot_genomic_map(ax_genemap, func_df, start, end, allowed_genes)
+            ax_genemap.set_xlim(0, max_prophage_len)
 
-        ax_genemap.set_title("", fontsize=10)
 
+    # Titles
     axes_dict["barplot"][0].set_title("Prophage positions in contigs")
-    axes_dict["family"][0].set_title("Family")
+    axes_dict["family"][0].set_title("Crassvirales family")
+    axes_dict["order"][0].set_title("Bacterial order")
     axes_dict["taxonomy"][0].set_title("Taxonomy")
-    axes_dict["genemap"][0].set_title("Genomic map")
+    axes_dict["genemap"][0].set_title("Genomic map (prophage)")
 
-    fig.tight_layout()
+    # Order legend (ONLY orders present on this plot)
+    handles = [mpatches.Patch(color=order_color_map[o], label=o) for o in sorted(order_color_map)]
+    fig.legend(handles=handles, ncol=4, loc="lower center", bbox_to_anchor=(0.5, -0.01), frameon=False, fontsize=8)
+
+    fig.tight_layout(rect=[0, 0.05, 1, 1])  # leave space for legend
     plt.savefig(output_file, dpi=300)
     plt.savefig(Path(output_file).with_suffix(".svg"))
     plt.close()
 
 
-def add_taxonomy_subplot(
-    fig: plt.Figure,
-    ax_main: plt.Axes,
-    genome_ids: List[str],
-    taxonomies: List[str],
-    subplot_width: float = 0.25
-) -> plt.Axes:
-    """
-    Add a new subplot to the right showing taxonomy info for each genome.
+# def add_taxonomy_subplot(
+#     fig: plt.Figure,
+#     ax_main: plt.Axes,
+#     genome_ids: List[str],
+#     taxonomies: List[str],
+#     subplot_width: float = 0.25
+# ) -> plt.Axes:
+#     """
+#     Add a new subplot to the right showing taxonomy info for each genome.
 
-    Args:
-        fig: The main matplotlib figure.
-        ax_main: The main axis (e.g., barplot).
-        genome_ids: List of genome IDs (y-axis positions).
-        taxonomies: List of corresponding taxonomy strings.
-        subplot_width: Fractional width of the subplot (e.g. 0.25 = 25% of total).
-    Returns:
-        ax_taxonomy: New subplot axis.
-    """
-    from matplotlib import gridspec
+#     Args:
+#         fig: The main matplotlib figure.
+#         ax_main: The main axis (e.g., barplot).
+#         genome_ids: List of genome IDs (y-axis positions).
+#         taxonomies: List of corresponding taxonomy strings.
+#         subplot_width: Fractional width of the subplot (e.g. 0.25 = 25% of total).
+#     Returns:
+#         ax_taxonomy: New subplot axis.
+#     """
+#     # from matplotlib import gridspec
 
-    # Get position of main axis
-    bbox = ax_main.get_position()
-    total_width = bbox.width + subplot_width
-    fig.clear()
+#     # Get position of main axis
+#     bbox = ax_main.get_position()
+#     total_width = bbox.width + subplot_width
+#     fig.clear()
 
-    # Setup new grid
-    gs = fig.add_gridspec(1, 2, width_ratios=[bbox.width, subplot_width], wspace=0.05)
-    ax_main_new = fig.add_subplot(gs[0, 0])
-    ax_taxonomy = fig.add_subplot(gs[0, 1], sharey=ax_main_new)
+#     # Setup new grid
+#     gs = fig.add_gridspec(1, 2, width_ratios=[bbox.width, subplot_width], wspace=0.05)
+#     ax_main_new = fig.add_subplot(gs[0, 0])
+#     ax_taxonomy = fig.add_subplot(gs[0, 1], sharey=ax_main_new)
 
-    # Re-plot the main plot if needed
-    # (optional: you might want to pass drawing code here again)
+#     # Re-plot the main plot if needed
+#     # (optional: you might want to pass drawing code here again)
 
-    # Plot taxonomy text
-    ax_taxonomy.set_xlim(0, 1)
-    ax_taxonomy.set_xticks([])
-    ax_taxonomy.set_yticks([])
+#     # Plot taxonomy text
+#     ax_taxonomy.set_xlim(0, 1)
+#     ax_taxonomy.set_xticks([])
+#     ax_taxonomy.set_yticks([])
 
-    for i, (gid, tax) in enumerate(zip(genome_ids, taxonomies)):
-        if pd.isna(tax):
-            tax = "NA"
-        ax_taxonomy.text(0, i, tax, va='center', ha='left', fontsize=8, clip_on=True)
+#     for i, (gid, tax) in enumerate(zip(genome_ids, taxonomies)):
+#         if pd.isna(tax):
+#             tax = "NA"
+#         ax_taxonomy.text(0, i, tax, va='center', ha='left', fontsize=8, clip_on=True)
 
-    ax_taxonomy.set_title("Taxonomy", fontsize=10)
-    ax_taxonomy.invert_yaxis()  # Align with main plot
-    return ax_taxonomy
+#     ax_taxonomy.set_title("Taxonomy", fontsize=10)
+#     ax_taxonomy.invert_yaxis()  # Align with main plot
+#     return ax_taxonomy
 
 
 
@@ -497,7 +706,7 @@ class ProphageBarFace(Face):
         self.margin_bottom = 2
 
     def update_pixels(self, node):
-        from PyQt5.QtGui import QPainter, QColor
+        # from PyQt5.QtGui import QPainter, QColor
         self.image = self._get_image(self.width, self.height)
         qp = QPainter(self.image)
 
