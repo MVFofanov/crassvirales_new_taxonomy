@@ -245,89 +245,89 @@ def extract_phylum_with_fallback(taxonomy: str) -> Tuple[str, str]:
 #     return order_to_color
 
 
-def build_order_maps_for_contigs(
-    taxonomy_df: pd.DataFrame,
-    contig_ids_to_plot: List[str],
-    accession_col: str = "accession",
-    taxonomy_col: str = "taxonomy"
-) -> Tuple[Dict[str, str], Dict[str, str]]:
-    """
-    Returns:
-      contig_order_map: contig_id -> order_name_or_fallback
-      order_color_map:  order_name -> color  (only for orders PRESENT in contig_ids_to_plot)
-    """
+# def build_order_maps_for_contigs(
+#     taxonomy_df: pd.DataFrame,
+#     contig_ids_to_plot: List[str],
+#     accession_col: str = "accession",
+#     taxonomy_col: str = "taxonomy"
+# ) -> Tuple[Dict[str, str], Dict[str, str]]:
+#     """
+#     Returns:
+#       contig_order_map: contig_id -> order_name_or_fallback
+#       order_color_map:  order_name -> color  (only for orders PRESENT in contig_ids_to_plot)
+#     """
 
-    # === fixed order → color mapping ===
-    fixed_order_color_map = {
-        # Mollicutes
-        'Acholeplasmatales':     '#9467bd',  # Mollicutes
-        # Bacilli
-        'Bacillales':            '#1f77b4',  # Bacilli
-        # use 'Unknown' instead of 'Bacteria' as an “order”
-        'Unknown':               '#999999',
+#     # === fixed order → color mapping ===
+#     fixed_order_color_map = {
+#         # Mollicutes
+#         'Acholeplasmatales':     '#9467bd',  # Mollicutes
+#         # Bacilli
+#         'Bacillales':            '#1f77b4',  # Bacilli
+#         # use 'Unknown' instead of 'Bacteria' as an “order”
+#         'Unknown':               '#999999',
 
-        # Bdellovibrionia
-        'Bdellovibrionales':     '#aec7e8',  # Bdellovibrionia
+#         # Bdellovibrionia
+#         'Bdellovibrionales':     '#aec7e8',  # Bdellovibrionia
 
-        # Candidatus groups (keep same as class)
-        'Candidatus Borrarchaeota': '#ff7f0e',
-        'Candidatus Pacearchaeota': '#fbc15e',
+#         # Candidatus groups (keep same as class)
+#         'Candidatus Borrarchaeota': '#ff7f0e',
+#         'Candidatus Pacearchaeota': '#fbc15e',
 
-        # Bacteroidetes/CFB group
-        'Chitinophagales':       '#2ca02c',  # Chitinophagia
-        'Cytophagales':          '#98df8a',  # Cytophagia
+#         # Bacteroidetes/CFB group
+#         'Chitinophagales':       '#2ca02c',  # Chitinophagia
+#         'Cytophagales':          '#98df8a',  # Cytophagia
 
-        # Firmicutes (Clostridia)
-        'Erysipelotrichales':    '#e377c2',  # Erysipelotrichia
-        'Eubacteriales':         '#ff7f0e',  # Clostridia (deprecated order but maps here)
-        'Lachnospirales':        '#ff7f0e',  # Clostridia
-        'Peptostreptococcales':  '#ff7f0e',  # Clostridia
+#         # Firmicutes (Clostridia)
+#         'Erysipelotrichales':    '#e377c2',  # Erysipelotrichia
+#         'Eubacteriales':         '#ff7f0e',  # Clostridia (deprecated order but maps here)
+#         'Lachnospirales':        '#ff7f0e',  # Clostridia
+#         'Peptostreptococcales':  '#ff7f0e',  # Clostridia
 
-        # Archaea
-        'Halobacteriales':       '#7f7f7f',  # Halobacteria (see note above)
-        'Methanobacteriales':    '#ff9896',  # Methanobacteria
+#         # Archaea
+#         'Halobacteriales':       '#7f7f7f',  # Halobacteria (see note above)
+#         'Methanobacteriales':    '#ff9896',  # Methanobacteria
 
-        # Proteobacteria (Alpha)
-        'Rickettsiales':         '#d62728',  # Alphaproteobacteria
+#         # Proteobacteria (Alpha)
+#         'Rickettsiales':         '#d62728',  # Alphaproteobacteria
 
-        # Candidate phylum/class Vampirovibriophyceae
-        'Vampirovibrionales':    '#c5b0d5',  # Vampirovibriophyceae
-    }
+#         # Candidate phylum/class Vampirovibriophyceae
+#         'Vampirovibrionales':    '#c5b0d5',  # Vampirovibriophyceae
+#     }
 
-    contig_order_map: Dict[str, str] = {}
-    seen_orders: List[str] = []
+#     contig_order_map: Dict[str, str] = {}
+#     seen_orders: List[str] = []
 
-    tax_by_acc = dict(zip(taxonomy_df[accession_col].astype(str),
-                          taxonomy_df[taxonomy_col].astype(str)))
+#     tax_by_acc = dict(zip(taxonomy_df[accession_col].astype(str),
+#                           taxonomy_df[taxonomy_col].astype(str)))
 
-    for contig_id in contig_ids_to_plot:
-        tax = tax_by_acc.get(str(contig_id), "")
-        _, ord_name = extract_order_with_fallback(tax)
-        contig_order_map[str(contig_id)] = ord_name
-        seen_orders.append(ord_name)
+#     for contig_id in contig_ids_to_plot:
+#         tax = tax_by_acc.get(str(contig_id), "")
+#         _, ord_name = extract_order_with_fallback(tax)
+#         contig_order_map[str(contig_id)] = ord_name
+#         seen_orders.append(ord_name)
 
-    unique_orders = sorted(set(seen_orders))
+#     unique_orders = sorted(set(seen_orders))
 
-    # === build final color map ===
-    order_color_map: Dict[str, str] = {}
-    import itertools
-    color_cycle = itertools.cycle(plt.cm.tab20.colors)
+#     # === build final color map ===
+#     order_color_map: Dict[str, str] = {}
+#     import itertools
+#     color_cycle = itertools.cycle(plt.cm.tab20.colors)
 
-    for o in unique_orders:
-        if o.lower() == "unknown":
-            order_color_map[o] = "#999999"
-        elif o in fixed_order_color_map:
-            order_color_map[o] = fixed_order_color_map[o]
-        else:
-            # new order not in your mapping → assign next distinct color
-            order_color_map[o] = next(color_cycle)
+#     for o in unique_orders:
+#         if o.lower() == "unknown":
+#             order_color_map[o] = "#999999"
+#         elif o in fixed_order_color_map:
+#             order_color_map[o] = fixed_order_color_map[o]
+#         else:
+#             # new order not in your mapping → assign next distinct color
+#             order_color_map[o] = next(color_cycle)
 
-    print("\n🔶 Order → Color mapping (shown on plot):")
-    for o in unique_orders:
-        print(f"  '{o}': '{order_color_map[o]}',")
-    print()
+#     print("\n🔶 Order → Color mapping (shown on plot):")
+#     for o in unique_orders:
+#         print(f"  '{o}': '{order_color_map[o]}',")
+#     print()
 
-    return contig_order_map, order_color_map
+#     return contig_order_map, order_color_map
 
 def build_class_maps_for_contigs(
     taxonomy_df: pd.DataFrame,
@@ -637,23 +637,22 @@ def create_gridspec_axes(n_rows: int) -> Tuple[plt.Figure, Dict[str, List[plt.Ax
     # Increase figure height to accommodate legends
     fig = plt.figure(figsize=(50, n_rows * 0.7 + 2))
 
-    # columns: barplot | family | origin | phylum | class | order | taxonomy | genemap
+    # columns: barplot | family | origin | phylum | class | taxonomy | genemap
     gs = gridspec.GridSpec(
-        n_rows + 1, 8,  # +1 row for legends
-        width_ratios=[20, 1.2, 1.2, 1.2, 1.2, 1.2, 12, 70],
+        n_rows + 1, 7,  # +1 row for legends; columns are 0..6
+        width_ratios=[20, 1.2, 1.2, 1.2, 1.2, 12, 70],
         wspace=0.05,
         height_ratios=[1]*n_rows + [0.6],
         hspace=0.2
     )
 
     axes = {
-        "barplot": [], 
-        "family": [], 
-        "is_mag": [],   
-        "phylum": [],   # NEW
-        "class": [], 
-        "order": [], 
-        "taxonomy": [], 
+        "barplot": [],
+        "family": [],
+        "is_mag": [],
+        "phylum": [],
+        "class": [],
+        "taxonomy": [],
         "genemap": [],
         "legend": None
     }
@@ -662,11 +661,10 @@ def create_gridspec_axes(n_rows: int) -> Tuple[plt.Figure, Dict[str, List[plt.Ax
         axes["barplot"].append(fig.add_subplot(gs[i, 0]))
         axes["family"].append(fig.add_subplot(gs[i, 1], sharey=axes["barplot"][i]))
         axes["is_mag"].append(fig.add_subplot(gs[i, 2], sharey=axes["barplot"][i]))
-        axes["phylum"].append(fig.add_subplot(gs[i, 3], sharey=axes["barplot"][i]))   # NEW
+        axes["phylum"].append(fig.add_subplot(gs[i, 3], sharey=axes["barplot"][i]))
         axes["class"].append(fig.add_subplot(gs[i, 4], sharey=axes["barplot"][i]))
-        axes["order"].append(fig.add_subplot(gs[i, 5], sharey=axes["barplot"][i]))
-        axes["taxonomy"].append(fig.add_subplot(gs[i, 6], sharey=axes["barplot"][i]))
-        axes["genemap"].append(fig.add_subplot(gs[i, 7], sharey=axes["barplot"][i]))
+        axes["taxonomy"].append(fig.add_subplot(gs[i, 5], sharey=axes["barplot"][i]))  # was 6
+        axes["genemap"].append(fig.add_subplot(gs[i, 6], sharey=axes["barplot"][i]))   # was 7
 
     axes["legend"] = fig.add_subplot(gs[n_rows, :])
     axes["legend"].axis('off')
@@ -720,9 +718,9 @@ def plot_prophage_positions(
     )
 
     # Build order colors only for what we actually plot
-    contig_order_map, order_color_map = build_order_maps_for_contigs(
-        taxonomy_df, contigs_in_plot
-    )
+    # contig_order_map, order_color_map = build_order_maps_for_contigs(
+    #     taxonomy_df, contigs_in_plot
+    # )
 
     # === global x-limits so widths vary across rows ===
     contig_lengths = [int(p["contig_length"]) for p in ordered_prophage_dict.values()]
@@ -740,7 +738,7 @@ def plot_prophage_positions(
 
         ax_bar = axes_dict["barplot"][i]
         ax_fam = axes_dict["family"][i]
-        ax_ord = axes_dict["order"][i]
+        # ax_ord = axes_dict["order"][i]
         ax_tax = axes_dict["taxonomy"][i]
         ax_genemap = axes_dict["genemap"][i]
 
@@ -848,15 +846,15 @@ def plot_prophage_positions(
                                             transform=ax_cls.transAxes,
                                             fill=False, edgecolor="black", linewidth=0.4))
 
-        # 4) Order box  (fills entire mini-axis)
-        order_name = contig_order_map.get(contig_id, "unknown")
-        ord_color = order_color_map.get(order_name, DEFAULT_COLOR)
-        ax_ord.set_xlim(0, 1); ax_ord.set_ylim(0, 1)
-        ax_ord.set_xticks([]); ax_ord.set_yticks([])
-        ax_ord.patch.set_facecolor(ord_color)
-        ax_ord.add_patch(mpatches.Rectangle((0, 0), 1, 1,
-                                            transform=ax_ord.transAxes,
-                                            fill=False, edgecolor="black", linewidth=0.4))
+        # # 4) Order box  (fills entire mini-axis)
+        # order_name = contig_order_map.get(contig_id, "unknown")
+        # ord_color = order_color_map.get(order_name, DEFAULT_COLOR)
+        # ax_ord.set_xlim(0, 1); ax_ord.set_ylim(0, 1)
+        # ax_ord.set_xticks([]); ax_ord.set_yticks([])
+        # ax_ord.patch.set_facecolor(ord_color)
+        # ax_ord.add_patch(mpatches.Rectangle((0, 0), 1, 1,
+        #                                     transform=ax_ord.transAxes,
+        #                                     fill=False, edgecolor="black", linewidth=0.4))
         
         # 5) Taxonomy text
         ax_tax.text(0, 0.4, taxonomy_labels[i], fontsize=10, va='center', ha='left')
@@ -971,7 +969,7 @@ def plot_prophage_positions(
     phylum_handles = [mpatches.Patch(color=used_phylum_color_map[p], label=p) 
                for p in sorted(used_phylum_color_map)]
     class_handles = [mpatches.Patch(color=class_color_map[c], label=c) for c in sorted(class_color_map)]
-    order_handles = [mpatches.Patch(color=order_color_map[o], label=o) for o in sorted(order_color_map)]
+    # order_handles = [mpatches.Patch(color=order_color_map[o], label=o) for o in sorted(order_color_map)]
     # === Add origin legend (Isolate/MAG) ===
     origin_handles = [
         mpatches.Patch(color=origin_color_map["Isolate"], label="Isolate"),
@@ -979,27 +977,33 @@ def plot_prophage_positions(
     ]
 
     # Position legends in the dedicated space
-    leg_phy = fig.legend(
-        phylum_handles, [h.get_label() for h in phylum_handles],
-        ncol=4, loc="lower center",
-        bbox_to_anchor=(0.5, -0.02),  # center bottom; adjust if needed
-        frameon=False, fontsize=TEXT_FONTSIZE,
-        title="Bacterial phylum", title_fontsize=TEXT_FONTSIZE
-    )
 
-    leg1 = fig.legend(
-        order_handles,
-        [h.get_label() for h in order_handles],
-        ncol=4,
+    # leg1 = fig.legend(
+    #     order_handles,
+    #     [h.get_label() for h in order_handles],
+    #     ncol=4,
+    #     loc="lower center",
+    #     bbox_to_anchor=(0.25, -0.02),  # further down
+    #     frameon=False,
+    #     fontsize=TEXT_FONTSIZE,
+    #     title="Bacterial order",
+    #     title_fontsize=TEXT_FONTSIZE
+    # )
+
+    leg_origin = fig.legend(
+        origin_handles,
+        [h.get_label() for h in origin_handles],
+        ncol=2,
         loc="lower center",
-        bbox_to_anchor=(0.25, -0.02),  # further down
+        # bbox_to_anchor=(0.5, -0.07),  # below the other two
+        bbox_to_anchor=(0.25, -0.02),
         frameon=False,
         fontsize=TEXT_FONTSIZE,
-        title="Bacterial order",
+        title="Genome origin",
         title_fontsize=TEXT_FONTSIZE
     )
 
-    leg2 = fig.legend(
+    leg_class = fig.legend(
         class_handles,
         [h.get_label() for h in class_handles],
         ncol=4,
@@ -1011,24 +1015,20 @@ def plot_prophage_positions(
         title_fontsize=TEXT_FONTSIZE
     )
 
-    leg3 = fig.legend(
-        origin_handles,
-        [h.get_label() for h in origin_handles],
-        ncol=2,
-        loc="lower center",
-        bbox_to_anchor=(0.5, -0.07),  # below the other two
-        frameon=False,
-        fontsize=TEXT_FONTSIZE,
-        title="Genome origin",
-        title_fontsize=TEXT_FONTSIZE
+    leg_phylum = fig.legend(
+        phylum_handles, [h.get_label() for h in phylum_handles],
+        ncol=4, loc="lower center",
+        bbox_to_anchor=(0.5, -0.02),  # center bottom; adjust if needed
+        frameon=False, fontsize=TEXT_FONTSIZE,
+        title="Bacterial phylum", title_fontsize=TEXT_FONTSIZE
     )
 
 
     # Add both legends to the axis
-    axes_dict["legend"].add_artist(leg_phy)
-    axes_dict["legend"].add_artist(leg1)
-    axes_dict["legend"].add_artist(leg2)
-    axes_dict["legend"].add_artist(leg3)
+    axes_dict["legend"].add_artist(leg_origin)
+    axes_dict["legend"].add_artist(leg_class)
+    axes_dict["legend"].add_artist(leg_phylum)
+    # axes_dict["legend"].add_artist(leg1)
 
     # Adjust layout with more space at bottom
     plt.subplots_adjust(
@@ -1047,7 +1047,7 @@ def plot_prophage_positions(
         (axes_dict["is_mag"][0], "Genome origin"),
         (axes_dict["phylum"][0], "Bacterial phylum"),   # NEW
         (axes_dict["class"][0],  "Bacterial class"),
-        (axes_dict["order"][0],  "Bacterial order"),
+        # (axes_dict["order"][0],  "Bacterial order"),
     ]:
         bbox = ax.get_position()
         x_mid = bbox.x0 + bbox.width / 2.0
