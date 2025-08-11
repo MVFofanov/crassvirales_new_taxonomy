@@ -28,6 +28,11 @@ TITLE_FONTSIZE = 20  # or 11 if you want them same as y-axis labels
 
 TEXT_FONTSIZE = 12
 
+LEGEND_FONTSIZE = 20   # bigger text
+LEGEND_TITLE_FONTSIZE = 30   # bigger text
+LEGEND_HANDLE_HEIGHT = 5.0  # taller color boxes
+LEGEND_HANDLE_LENGTH = 5.0  # wider color boxes
+
 ORDER_LIKE = re.compile(r".*ales$", re.IGNORECASE)
 
 # top-level (after imports)
@@ -344,15 +349,22 @@ def build_class_maps_for_contigs(
     # Fixed mapping (pick distinct tab20-ish colors; edit if you want specific classes)
     class_color_map = {
         # Bacterial classes
-        'Bacilli':              '#1f77b4',
-        'Bdellovibrionia':      '#aec7e8',
-        'Chitinophagia':        '#2ca02c',
-        'Clostridia':           '#ff7f0e',
-        'Cytophagia':           '#98df8a',
-        'Erysipelotrichia':     '#e377c2',
-        'Ignavibacteria':       '#d62728',
-        'Mollicutes':           '#9467bd',
-        'Vampirovibriophyceae': '#c5b0d5',
+        # Bacillota
+        'Bacilli':              '#e6194B',
+        'Clostridia':           '#f58231',
+        'Erysipelotrichia':     '#911eb4',
+
+        # Bacteroidota
+        'Chitinophagia':        '#f032e6',
+        'Cytophagia':           '#000075',
+
+        'Ignavibacteria':       '#fabed4',
+
+        'Bdellovibrionia':      '#bfef45',
+
+        'Mollicutes':           '#911eb4',
+        'Vampirovibriophyceae': '#42d4f4',
+
         'Unknown':              '#999999',  # fallback for unassigned bacterial classes
 
         # Archaeal classes (black)
@@ -414,25 +426,38 @@ def build_phylum_maps_for_contigs(
     phylum_color_map = {
         # Bacteria phyla
         'Bacillota':              '#1f77b4',  # from Bacilli
-        'Bdellovibrionota':       '#aec7e8',  # from Bdellovibrionia
+        'Firmicutes':             '#1f77b4',
+
+        'Bdellovibrionota':       '#bfef45',  # from Bdellovibrionia
+    
         'Bacteroidota':           '#2ca02c',  # from Chitinophagia
-        'Firmicutes':             '#ff7f0e',  # legacy mapping with Clostridia-like color
-        'Cyanobacteriota':        '#98df8a',  # paired with Cytophagia tone
-        'Actinomycetota':         '#e377c2',  # paired with Erysipelotrichia tone
-        'Proteobacteria':         '#d62728',  # covers Alpha/others
-        'Spirochaetota':          '#9467bd',  # paired with Mollicutes tone
-        'Planctomycetota':        '#c5b0d5',  # paired with Vampirovibriophyceae tone
-        'Chloroflexota':          '#d62728',
-        'Thermotogota':           '#ff7f0e',
+        'Bacteroidetes':           '#2ca02c',
+    
+        'Proteobacteria':         '#9A6324',  # covers Alpha/others
+        'Pseudomonadota':         '#9A6324',
+    
+        'Mycoplasmatota':         "#911eb4",
+
+        'Chloroflexota':          '#ffe119',
+
+        'Ignavibacteriota':          '#fabed4',
+
+        'Candidatus Melainabacteria':  '#42d4f4',
+
+        # Unused colors
+        # 'Thermotogota':           '#ff7f0e',
+        # 'Cyanobacteriota':        '#98df8a',  # paired with Cytophagia tone
+        # 'Actinomycetota':         '#e377c2',  # paired with Erysipelotrichia tone
+        # 'Planctomycetota':        '#c5b0d5',  # paired with Vampirovibriophyceae tone
 
         # Archaea (always black)
         'Candidatus Borrarchaeota': '#000000',
         'Candidatus Pacearchaeota': '#000000',
-        'Euryarchaeota':            '#000000',
-        'Halobacteriota':           '#000000',
+        # 'Euryarchaeota':            '#000000',
+        # 'Halobacteriota':           '#000000',
         'Methanobacteriota':        '#000000',
-        'Nanoarchaeota':            '#000000',
-        'Thermoproteota':           '#000000',
+        # 'Nanoarchaeota':            '#000000',
+        # 'Thermoproteota':           '#000000',
 
         # Fallback
         'Unknown': DEFAULT_COLOR,
@@ -993,34 +1018,43 @@ def plot_prophage_positions(
     leg_origin = fig.legend(
         origin_handles,
         [h.get_label() for h in origin_handles],
+        ncol=1,
+        loc="lower left",
+        bbox_to_anchor=(0.1, 0.03),
+        frameon=False,
+        fontsize=LEGEND_FONTSIZE,
+        title="Genome origin",
+        title_fontsize=LEGEND_TITLE_FONTSIZE,
+        handleheight=LEGEND_HANDLE_HEIGHT,
+        handlelength=LEGEND_HANDLE_LENGTH
+    )
+
+    leg_phylum = fig.legend(
+        phylum_handles,
+        [h.get_label() for h in phylum_handles],
         ncol=2,
         loc="lower center",
-        # bbox_to_anchor=(0.5, -0.07),  # below the other two
-        bbox_to_anchor=(0.25, -0.02),
+        bbox_to_anchor=(0.35, -0.1),
         frameon=False,
-        fontsize=TEXT_FONTSIZE,
-        title="Genome origin",
-        title_fontsize=TEXT_FONTSIZE
+        fontsize=LEGEND_FONTSIZE,
+        title="Bacterial phylum",
+        title_fontsize=LEGEND_TITLE_FONTSIZE,
+        handleheight=LEGEND_HANDLE_HEIGHT,
+        handlelength=LEGEND_HANDLE_LENGTH
     )
 
     leg_class = fig.legend(
         class_handles,
         [h.get_label() for h in class_handles],
-        ncol=4,
-        loc="lower center",
-        bbox_to_anchor=(0.75, -0.02),  # further down, right side
+        ncol=2,
+        loc="lower right",
+        bbox_to_anchor=(0.75, -0.1),
         frameon=False,
-        fontsize=TEXT_FONTSIZE,
+        fontsize=LEGEND_FONTSIZE,
         title="Bacterial class",
-        title_fontsize=TEXT_FONTSIZE
-    )
-
-    leg_phylum = fig.legend(
-        phylum_handles, [h.get_label() for h in phylum_handles],
-        ncol=4, loc="lower center",
-        bbox_to_anchor=(0.5, -0.02),  # center bottom; adjust if needed
-        frameon=False, fontsize=TEXT_FONTSIZE,
-        title="Bacterial phylum", title_fontsize=TEXT_FONTSIZE
+        title_fontsize=LEGEND_TITLE_FONTSIZE,
+        handleheight=LEGEND_HANDLE_HEIGHT,
+        handlelength=LEGEND_HANDLE_LENGTH
     )
 
 
