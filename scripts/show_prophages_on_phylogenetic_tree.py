@@ -343,21 +343,23 @@ def build_class_maps_for_contigs(
 
     # Fixed mapping (pick distinct tab20-ish colors; edit if you want specific classes)
     class_color_map = {
-       # 'Alphaproteobacteria': '#d62728',
+        # Bacterial classes
         'Bacilli':              '#1f77b4',
         'Bdellovibrionia':      '#aec7e8',
-        'Candidatus Borrarchaeota': '#ff7f0e',
-        'Candidatus Pacearchaeota': '#fbc15e',
         'Chitinophagia':        '#2ca02c',
         'Clostridia':           '#ff7f0e',
         'Cytophagia':           '#98df8a',
         'Erysipelotrichia':     '#e377c2',
-        'Halobacteria':         '#7f7f7f',   # consider swapping to a non-gray if you want "gray = unknown only"
         'Ignavibacteria':       '#d62728',
-        'Methanobacteria':      '#ff9896',
         'Mollicutes':           '#9467bd',
         'Vampirovibriophyceae': '#c5b0d5',
-        'Unknown':              '#999999',   # use this for unassigned
+        'Unknown':              '#999999',  # fallback for unassigned bacterial classes
+
+        # Archaeal classes (black)
+        'Candidatus Borrarchaeota': '#000000',
+        'Candidatus Pacearchaeota': '#000000',
+        'Halobacteria':             '#000000',
+        'Methanobacteria':          '#000000',
     }
 
     contig_class_map: Dict[str, str] = {}
