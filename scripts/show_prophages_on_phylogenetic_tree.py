@@ -237,6 +237,87 @@ def extract_phylum_with_fallback(taxonomy: str) -> Tuple[str, str]:
 
     return "unknown", "Unknown"
 
+def extract_order_strict(taxonomy: str) -> str:
+    """
+    Return only the ORDER name if present, else 'Unknown'.
+    Priority: exact NCBI rank 'order' → heuristic '...ales' → Unknown.
+    """
+    tokens = _split_taxonomy_string(taxonomy)
+    if not tokens:
+        return "Unknown"
+
+    # exact NCBI 'order'
+    order = _try_ncbi_rank(tokens, "order")
+    if order:
+        return order
+
+    # heuristic suffix
+    for tok in tokens:
+        if ORDER_LIKE.match(tok):
+            return tok
+
+    return "Unknown"
+
+
+def extract_family_strict(taxonomy: str) -> str:
+    """
+    Return only the FAMILY name if present, else 'Unknown'.
+    Priority: exact NCBI rank 'family' → heuristic '...aceae' → Unknown.
+    """
+    tokens = _split_taxonomy_string(taxonomy)
+    if not tokens:
+        return "Unknown"
+
+    fam = _try_ncbi_rank(tokens, "family")
+    if fam:
+        return fam
+
+    for tok in tokens:
+        if tok.endswith("aceae"):
+            return tok
+
+    return "Unknown"
+
+
+def format_order_family_label(taxonomy: str, multiline: bool = True) -> str:
+    """
+    Build the text shown in the 'Taxonomy lineage' column: only Order and Family.
+    If both missing → 'Unknown'. If multiline=True, put them on separate lines.
+    """
+    order = extract_order_strict(taxonomy)
+    family = extract_family_strict(taxonomy)
+
+    parts = []
+    if order != "Unknown":
+        parts.append(order)
+    if family != "Unknown":
+        parts.append(family)
+
+    if not parts:
+        return "Unknown"
+
+    return ";".join(parts)
+
+def format_order_family_or_full(taxonomy: str, multiline: bool = True) -> str:
+    """
+    Show only Order and Family; if neither can be extracted, return the original taxonomy string.
+    """
+    # Try extracting
+    order = extract_order_strict(taxonomy)
+    family = extract_family_strict(taxonomy)
+
+    parts = []
+    if order != "Unknown":
+        parts.append(order)
+    if family != "Unknown":
+        parts.append(family)
+
+    if parts:  # we found at least one of order/family
+        return ("\n" if multiline else "; ").join(parts)
+
+    # fallback: original taxonomy (could be empty if missing in table)
+    return taxonomy if isinstance(taxonomy, str) and taxonomy.strip() else "Unknown"
+
 # def build_order_color_map(unique_orders: list) -> dict:
 #     """Assign distinct colors to orders, keeping 'unknown' grey."""
 #     import itertools
@@ -660,12 +741,12 @@ def merge_prophage_with_taxonomy(
 
 def create_gridspec_axes(n_rows: int) -> Tuple[plt.Figure, Dict[str, List[plt.Axes]]]:
     # Increase figure height to accommodate legends
-    fig = plt.figure(figsize=(50, n_rows * 0.7 + 2))
+    fig = plt.figure(figsize=(60, n_rows * 0.7 + 2))
 
     # columns: barplot | family | origin | phylum | class | taxonomy | genemap
     gs = gridspec.GridSpec(
         n_rows + 1, 7,  # +1 row for legends; columns are 0..6
-        width_ratios=[20, 1.2, 1.2, 1.2, 1.2, 12, 70],
+        width_ratios=[20, 1.2, 1.2, 1.2, 1.2, 20, 90],
         wspace=0.05,
         height_ratios=[1]*n_rows + [0.6],
         hspace=0.2
@@ -719,9 +800,13 @@ def plot_prophage_positions(
             if prophage.get("prophage_id", "").startswith(genome_id):
                 ordered_prophage_dict[contig_id] = prophage
                 contigs_in_plot.append(contig_id)
+                # tax_row = taxonomy_df[taxonomy_df["accession"].astype(str) == str(contig_id)]
+                # taxonomy = tax_row["taxonomy"].values[0] if not tax_row.empty else "NA"
+                # taxonomy_labels.append(taxonomy)
                 tax_row = taxonomy_df[taxonomy_df["accession"].astype(str) == str(contig_id)]
-                taxonomy = tax_row["taxonomy"].values[0] if not tax_row.empty else "NA"
-                taxonomy_labels.append(taxonomy)
+                taxonomy = tax_row["taxonomy"].values[0] if not tax_row.empty else ""
+                # taxonomy_labels.append(format_order_family_label(taxonomy))
+                taxonomy_labels.append(format_order_family_or_full(taxonomy, multiline=False))
                 break
 
     n = len(ordered_prophage_dict)
@@ -807,7 +892,7 @@ def plot_prophage_positions(
         ))
 
         # Label
-        ax_bar.set_ylabel(full_label, fontsize=TEXT_FONTSIZE, ha='right', rotation=0)
+        ax_bar.set_ylabel(full_label, fontsize=TITLE_FONTSIZE, ha='right', rotation=0)
 
         ax_cls = axes_dict["class"][i]  # NEW
 
@@ -882,7 +967,7 @@ def plot_prophage_positions(
         #                                     fill=False, edgecolor="black", linewidth=0.4))
         
         # 5) Taxonomy text
-        ax_tax.text(0, 0.4, taxonomy_labels[i], fontsize=10, va='center', ha='left')
+        ax_tax.text(0, 0.4, taxonomy_labels[i], fontsize=20, va='center', ha='left')
         ax_tax.set_xlim(0, 1); ax_tax.set_xticks([]); ax_tax.set_yticks([])
 
         # 6) Genomic map (handle absolute vs local coords + debug + fallbacks)
@@ -978,7 +1063,7 @@ def plot_prophage_positions(
         fontsize=TITLE_FONTSIZE, pad=20  # Increased pad
     )
     axes_dict["taxonomy"][0].set_title(
-        "Taxonomy lineage",
+        "Bacterial order and family",
         fontsize=TITLE_FONTSIZE, pad=20  # Increased pad
     )
     axes_dict["genemap"][0].set_title(
