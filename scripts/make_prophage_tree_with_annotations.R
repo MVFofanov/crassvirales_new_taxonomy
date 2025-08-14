@@ -165,7 +165,7 @@ for (nd in collapse_nodes) p0 <- collapse(p0, node=nd)
 x_span <- diff(range(p0$data$x, na.rm=TRUE))
 
 lab_offset  <- 0.025 * x_span   # distance between tips and labels
-panel_shift <- 0.060 * x_span   # push block of panels to the right of labels
+panel_shift <- 0.4 * x_span   # push block of panels to the right of labels, 0.060 * x_span
 panel_gap   <- 0.012 * x_span   # uniform gap between panels
 panel_w     <- 0.045 * x_span   # SAME width for all panels (change this one number)
 
