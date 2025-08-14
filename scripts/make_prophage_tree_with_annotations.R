@@ -192,8 +192,15 @@ bar_width <- 0.2 * x_span     # width of the barplot strip (tweak to taste), 0.0
 len_offset <- lab_offset + panel_shift + panels_total_width + bar_gap
 len_width  <- bar_width
 
-# total width added to the tree canvas
-total_width_all <- panels_total_width + bar_gap + bar_width
+# ---- NEW: space for numeric values to the right of bars ----
+value_gap   <- 0.02 * x_span   # gap between bar end and text column
+value_width <- 0.06 * x_span   # width to reserve for numbers (tweak to taste)
+
+# x-position for the value column's left edge
+value_x     <- len_offset + len_width + value_gap
+
+# total width added to the tree canvas (include value column)
+total_width_all <- panels_total_width + bar_gap + bar_width + value_gap + value_width
 extra_right     <- 0.10 * x_span
 
 # ======================= 7) base tree =======================
@@ -305,6 +312,18 @@ len_bg_df <- pd_tips %>%
     ymin = y - 0.5,   ymax = y + 0.5
   )
 
+# labels placed just beyond each bar; clamp to reserved value column
+text_pad <- 0.01 * x_span  # small extra pad after each bar
+labels_df <- bars_df %>%
+  mutate(
+    # propose to put text right after the bar end:
+    x_text_raw = x1 + text_pad,
+    # but don't let it spill beyond the reserved value column:
+    x_text = pmin(x_text_raw, value_x + value_width * 0.95),
+    # format length (kb) — pick 0 or 1 decimal as you prefer
+    lab = sprintf("%.1f", len_kb)
+  )
+
 # ======================= 9) draw panels (robust, one combined scale) =======================
 
 # helper: add panel-specific prefixes but keep NAs as NA
@@ -369,6 +388,14 @@ p <- p + geom_rect(
   aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax),
   inherit.aes = FALSE,
   fill = "grey35", color = NA
+)
+
+p <- p + geom_text(
+  data = labels_df,
+  aes(x = x_text, y = y, label = lab),
+  inherit.aes = FALSE,
+  hjust = 0, vjust = 0.5,
+  size = 2.6
 )
 
 # (optional) a small title above the bar panel — comment out if not needed
