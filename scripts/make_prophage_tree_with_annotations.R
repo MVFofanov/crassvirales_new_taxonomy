@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 
 # ======================= deps =======================
-pkgs_cran <- c("ape","ggplot2","dplyr","readr","tibble","tidyr","stringr")
+pkgs_cran <- c("ape","ggplot2","gggenes","dplyr","readr","tibble","tidyr","stringr")
 for (pkg in pkgs_cran) if (!requireNamespace(pkg, quietly=TRUE)) install.packages(pkg, repos="https://cloud.r-project.org")
 if (!requireNamespace("BiocManager", quietly=TRUE)) install.packages("BiocManager", repos="https://cloud.r-project.org")
 for (pkg in c("ggtree","treeio")) if (!requireNamespace(pkg, quietly=TRUE)) BiocManager::install(pkg, ask=FALSE, update=FALSE)
@@ -10,6 +10,7 @@ if (!requireNamespace("ggnewscale", quietly=TRUE)) install.packages("ggnewscale"
 library(ape)
 library(ggplot2)
 library(ggtree)
+library(gggenes)
 library(treeio)
 library(ggnewscale)
 library(dplyr)
@@ -58,6 +59,8 @@ tree_file <- file.path(crassus_results_dir, "5_phylogenies/3_iToL/Terl_iToL_rena
 ann_file  <- file.path(proj_dir, "Crassphage_prophage_analysis_annotation.tsv")
 itol_file <- file.path(crassus_results_dir, "5_phylogenies/3_iToL/TerL_iToL_simplified.txt")
 itol_simplified_file <- file.path(dirname(itol_file), "TerL_iToL_simplified.txt")
+
+genes_file <- file.path(crassus_results_dir, "4_ORF/3_functional_annot_table_renamed.tsv")
 
 out_png <- file.path(proj_dir, "TerL_Crassvirales_pruned_collapsed.png")
 out_svg <- file.path(proj_dir, "TerL_Crassvirales_pruned_collapsed.svg")
@@ -174,42 +177,47 @@ panel_w     <- 0.045 * x_span   # SAME width for all panels (change this one num
 
 ## ---- panel layout (now with a 'len' panel) ----
 # widths: keep existing four panels at panel_w; give length panel a bit more room
-len_width <- 0.06 * x_span  # tweak to taste
+# len_width <- 0.06 * x_span  # tweak to taste
 
 # ---- panel layout: 4 heatmap panels only ----
+## ---- panel layout (left → right) ----
+
+# 4 heatmap panels
 panel_names  <- c("family","origin","phylum","class")
 panel_widths <- setNames(rep(panel_w, length(panel_names)), panel_names)
-
 cum_left       <- c(0, cumsum(head(panel_widths, -1) + panel_gap))
 panel_offsets  <- lab_offset + panel_shift + cum_left
 names(panel_offsets) <- panel_names
-
-# total width of the 4 heatmap panels
 panels_total_width <- sum(panel_widths) + panel_gap * (length(panel_widths) - 1)
 
-# ---- NEW: contig panel (gray bar + red prophage segment) ----
-contig_gap   <- 1.5 * x_span   # space between last heatmap panel and contig panel
-contig_width <- 0.6 * x_span   # width of contig panel
+# contig panel (gray bar + red prophage segment)
+contig_gap    <- 1.5 * x_span
+contig_width  <- 0.6 * x_span
 contig_offset <- lab_offset + panel_shift + panels_total_width + contig_gap
 
-# ---- length bar panel (to the right of contig panel) ----
-bar_gap   <- 0.05 * x_span
-bar_width <- 0.2 * x_span
+# gene map panel (per-ORF rectangles), to the RIGHT of contig
+gene_gap    <- 0.05 * x_span
+gene_width  <- 1  * x_span
+gene_offset <- contig_offset + contig_width + gene_gap
 
-len_offset <- contig_offset + contig_width + bar_gap
+# length bars panel, to the RIGHT of gene map
+bar_gap   <- 0.05 * x_span
+bar_width <- 0.2  * x_span
+len_offset <- gene_offset + gene_width + bar_gap
 len_width  <- bar_width
 
-# ---- numbers to the right of length bars (you already added these) ----
+# numeric labels to the RIGHT of length bars
 value_gap   <- 0.02 * x_span
 value_width <- 0.06 * x_span
 value_x     <- len_offset + len_width + value_gap
 
-# total width added to the tree canvas (include contig panel + length bars + numbers)
+# total width for xlim_tree
 total_width_all <- (panels_total_width +
                       contig_gap + contig_width +
-                      bar_gap + bar_width +
-                      value_gap + value_width)
-extra_right     <- 0.10 * x_span
+                      gene_gap   + gene_width +
+                      bar_gap    + bar_width +
+                      value_gap  + value_width)
+extra_right <- 0.10 * x_span
 
 # ======================= 7) base tree =======================
 p <- ggtree(tr_pruned, layout="rectangular") %<+% tips_tbl_pruned +
@@ -385,6 +393,53 @@ labels_df <- bars_df %>%
     lab = sprintf("%.1f", len_kb)
   )
 
+# ======================= gene map data (per-prophage ORFs) =======================
+# The file must have: genome, start, end, strand, yutin
+genes_raw <- suppressMessages(readr::read_tsv(genes_file, show_col_types = FALSE))
+
+# normalize / keep only what we need
+genes_norm <- genes_raw %>%
+  transmute(
+    genome = as.character(genome),                # matches tips_tbl_pruned$genome_id
+    start  = suppressWarnings(as.numeric(start)),
+    end    = suppressWarnings(as.numeric(end)),
+    strand = ifelse(strand %in% c("+","-"), strand, NA_character_),
+    yutin  = as.character(yutin)
+  )
+
+# Join to get y (row), label, and the prophage length (pl)
+gene_df <- genes_norm %>%
+  inner_join(
+    tips_tbl_pruned %>% select(label, genome_id, is_prophage, prophage_length),
+    by = c("genome" = "genome_id")
+  ) %>%
+  inner_join(pd_tips %>% select(label, y), by = "label") %>%
+  mutate(pl = suppressWarnings(as.numeric(prophage_length))) %>%
+  filter(is_prophage %in% TRUE, is.finite(pl), pl > 0,
+         is.finite(start), is.finite(end))
+
+# Clamp to [1, pl] and map to the gene panel width
+row_half_gene <- 0.28
+gene_df <- gene_df %>%
+  mutate(
+    s = pmax(1, pmin(start, pl)),
+    e = pmax(s, pmin(end,   pl)),
+    x0 = gene_offset + ((s - 1) / pl) * gene_width,
+    x1 = gene_offset + ( e      / pl) * gene_width,
+    ymin = y - row_half_gene,
+    ymax = y + row_half_gene,
+    fill_gene = ifelse(!is.na(yutin) & yutin != "", "#d62728", "grey30")
+  ) %>%
+  filter(is.finite(x0), is.finite(x1), x1 > x0)
+
+# background strips for the full gene panel
+gene_row_bg_df <- pd_tips %>%
+  transmute(
+    x0 = gene_offset, x1 = gene_offset + gene_width,
+    ymin = y - 0.5,   ymax = y + 0.5
+  )
+
+
 # ======================= 9) draw panels (robust, one combined scale) =======================
 
 # helper: add panel-specific prefixes but keep NAs as NA
@@ -499,6 +554,32 @@ p <- p + scale_fill_manual(
   drop = FALSE,
   name = "Side panels"
 )
+
+# --- draw length bars + numbers (you already have these) ---
+# p <- p + geom_rect(data = len_bg_df,  aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax),
+#                    inherit.aes = FALSE, fill = "#F2F2F2", color = NA)
+# p <- p + geom_rect(data = bars_df,    aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax),
+#                    inherit.aes = FALSE, fill = "grey35", color = NA)
+# p <- p + geom_text(data = labels_df,  aes(x = x_text, y = y, label = lab),
+#                    inherit.aes = FALSE, hjust = 0, vjust = 0.5, size = 2.6)
+
+# --- NOW add the gene map panel to the right ---
+# ggnewscale::new_scale_fill()  # start a fresh fill scale so we don't replace the heatmap scale
+p <- p + ggnewscale::new_scale_fill()   # <-- was just ggnewscale::new_scale_fill()
+
+# background strip for the whole gene panel
+p <- p + geom_rect(
+  data = gene_row_bg_df,
+  aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax),
+  inherit.aes = FALSE, fill = "#F2F2F2", color = NA
+)
+
+# gene rectangles (red if yutin != "", otherwise grey)
+p <- p + geom_rect(
+  data = gene_df,
+  aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax, fill = fill_gene),
+  inherit.aes = FALSE, color = NA
+) + scale_fill_identity(guide = "none")
 
 
 
