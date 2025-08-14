@@ -398,16 +398,19 @@ labels_df <- bars_df %>%
 genes_raw <- suppressMessages(readr::read_tsv(genes_file, show_col_types = FALSE))
 
 # normalize / keep only what we need
+# ======================= gene map data (per-prophage ORFs) =======================
+genes_raw <- suppressMessages(readr::read_tsv(genes_file, show_col_types = FALSE))
+
 genes_norm <- genes_raw %>%
   transmute(
-    genome = as.character(genome),                # matches tips_tbl_pruned$genome_id
+    genome = as.character(genome),
     start  = suppressWarnings(as.numeric(start)),
     end    = suppressWarnings(as.numeric(end)),
     strand = ifelse(strand %in% c("+","-"), strand, NA_character_),
     yutin  = as.character(yutin)
   )
 
-# Join to get y (row), label, and the prophage length (pl)
+# Join to tips to get row y and prophage length
 gene_df <- genes_norm %>%
   inner_join(
     tips_tbl_pruned %>% select(label, genome_id, is_prophage, prophage_length),
@@ -418,7 +421,7 @@ gene_df <- genes_norm %>%
   filter(is_prophage %in% TRUE, is.finite(pl), pl > 0,
          is.finite(start), is.finite(end))
 
-# Clamp to [1, pl] and map to the gene panel width
+# Map gene coords to the gene panel and add colors
 row_half_gene <- 0.28
 gene_df <- gene_df %>%
   mutate(
@@ -432,12 +435,42 @@ gene_df <- gene_df %>%
   ) %>%
   filter(is.finite(x0), is.finite(x1), x1 > x0)
 
-# background strips for the full gene panel
+# Background strips for the full gene panel
 gene_row_bg_df <- pd_tips %>%
   transmute(
     x0 = gene_offset, x1 = gene_offset + gene_width,
     ymin = y - 0.5,   ymax = y + 0.5
   )
+
+# ---- build arrow-shaped polygons for genes (MUST come after gene_df has x0/x1/ymin/ymax) ----
+head_frac <- 0.33
+head_min  <- 0.004 * x_span
+head_max  <- 0.10  * gene_width
+
+gene_polys <- gene_df %>%
+  mutate(
+    id    = dplyr::row_number(),
+    ymid  = (ymin + ymax) / 2,
+    width = pmax(x1 - x0, .Machine$double.eps),
+    head  = pmin(pmax(width * head_frac, head_min), head_max)
+  ) %>%
+  rowwise() %>%
+  do({
+    g <- .
+    if (!g$strand %in% c("+","-")) {
+      xs <- c(g$x0, g$x1, g$x1, g$x0, g$x0)
+      ys <- c(g$ymin, g$ymin, g$ymax, g$ymax, g$ymin)
+    } else if (g$strand == "+") {
+      xs <- c(g$x0, g$x1 - g$head, g$x1,        g$x1 - g$head, g$x0)
+      ys <- c(g$ymin, g$ymin,      g$ymid,      g$ymax,        g$ymax)
+    } else { # strand == "-"
+      xs <- c(g$x0 + g$head, g$x1,  g$x1,       g$x0 + g$head, g$x0)
+      ys <- c(g$ymin,        g$ymin, g$ymax,    g$ymax,        g$ymid)
+    }
+    tibble(id = g$id, x = xs, y = ys, fill_gene = g$fill_gene)
+  }) %>%
+  ungroup()
+
 
 
 # ======================= 9) draw panels (robust, one combined scale) =======================
@@ -574,11 +607,19 @@ p <- p + geom_rect(
   inherit.aes = FALSE, fill = "#F2F2F2", color = NA
 )
 
-# gene rectangles (red if yutin != "", otherwise grey)
-p <- p + geom_rect(
-  data = gene_df,
-  aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax, fill = fill_gene),
-  inherit.aes = FALSE, color = NA
+# # gene rectangles (red if yutin != "", otherwise grey)
+# p <- p + geom_rect(
+#   data = gene_df,
+#   aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax, fill = fill_gene),
+#   inherit.aes = FALSE, color = NA
+# ) + scale_fill_identity(guide = "none")
+
+# gene arrows as polygons (respect strand direction)
+p <- p + geom_polygon(
+  data = gene_polys,
+  aes(x = x, y = y, group = id, fill = fill_gene),
+  inherit.aes = FALSE,
+  color = NA     # or color="white", size=0.1 for thin outlines
 ) + scale_fill_identity(guide = "none")
 
 
