@@ -4,6 +4,7 @@ import os
 import re
 from collections import OrderedDict
 from pathlib import Path
+from typing import Optional, Dict, List, Tuple
 
 import matplotlib
 import matplotlib.patches as mpatches
@@ -1377,6 +1378,172 @@ def render_tree(tree: Tree, output_file: Path, family_to_color: dict[str, str]) 
     tree.render(str(output_file), w=2000, tree_style=ts)
 
 
+def _normalize_origin(val: str) -> str:
+    """Return 'MAG', 'Isolate', or 'Unknown'."""
+    if not isinstance(val, str) or not val.strip():
+        return "Unknown"
+    v = val.strip().lower()
+    if v in {"mag"}:
+        return "MAG"
+    if v in {"isolate", "culture"}:
+        return "Isolate"
+    return val  # keep custom labels if present
+
+
+def _as_int(x: object, default: int = 0) -> int:
+    try:
+        return int(float(str(x)))
+    except Exception:
+        return default
+
+
+def find_best_prophage_match(genome_id: str, prophage_df: pd.DataFrame) -> Optional[pd.Series]:
+    """
+    Pick a single prophage row for this genome_id.
+    Rule: rows where `prophage_id` startswith(genome_id); choose the longest (end-start).
+    """
+    if "prophage_id" not in prophage_df.columns:
+        return None
+    sub = prophage_df[prophage_df["prophage_id"].astype(str).str.startswith(str(genome_id))].copy()
+    if sub.empty:
+        return None
+
+    # robust ints
+    sub["__start"] = sub["start"].apply(_as_int)
+    sub["__end"] = sub["end"].apply(_as_int)
+    sub["__len"] = (sub["__end"] - sub["__start"]).clip(lower=0)
+
+    # tie-breaker: prefer rows that also have contig_length defined
+    sub["__has_len"] = sub.get("contig_length", pd.Series([None]*len(sub))).apply(lambda v: pd.notna(v))
+    # pick by longest, then has_len desc, then first
+    sub = sub.sort_values(["__len", "__has_len"], ascending=[False, False])
+    return sub.iloc[0]
+
+
+def get_taxonomy_fields_for_contig(contig_id: str, taxonomy_df: pd.DataFrame) -> Tuple[str, str, str, str]:
+    """
+    Returns: (phylum, class, order_and_family, full_lineage)
+    """
+    if taxonomy_df is None or taxonomy_df.empty:
+        return ("Unknown", "Unknown", "Unknown", "Unknown")
+
+    row = taxonomy_df.loc[taxonomy_df["accession"].astype(str) == str(contig_id)]
+    if row.empty:
+        return ("Unknown", "Unknown", "Unknown", "Unknown")
+
+    lineage = str(row.iloc[0].get("taxonomy", "") or "")
+    # full lineage as-is (don’t drop tokens)
+    full_lineage = lineage if lineage.strip() else "Unknown"
+
+    # phylum/class via your fallbacks (+ NCBI cache when available)
+    _, phylum_name = extract_phylum_with_fallback(full_lineage)
+    _, class_name = extract_class_with_fallback(full_lineage)
+
+    # concise "Order;Family" (or the original string if not found)
+    order_family = format_order_family_or_full(full_lineage, multiline=False)
+    return (phylum_name, class_name, order_family, full_lineage)
+
+
+def build_crassphage_annotation_table(
+    tree: Tree,
+    leaf_to_family: Dict[str, Optional[str]],
+    prophage_df: pd.DataFrame,
+    taxonomy_df: pd.DataFrame,
+    include_unmatched: bool = False,
+) -> pd.DataFrame:
+    """
+    Build a single tidy table for ggtree/gggenomes.
+
+    Columns (snake_case, stable for R/tidyverse):
+      - protein_id
+      - genome_id
+      - bacterial_id
+      - prophage_length
+      - bacterial_contig_length
+      - prophage_start
+      - prophage_end
+      - crassvirales_family
+      - genome_origin
+      - bacterial_phylum
+      - bacterial_class
+      - bacterial_order_and_family
+      - bacterial_taxonomy_lineage
+    """
+    # 1) canonical mapping (your current logic)
+    leaf_metadata, _, _ = build_leaf_metadata(tree)
+
+    rows: List[Dict[str, object]] = []
+    leaves = list(tree.iter_leaves())
+
+    for leaf in leaves:
+        protein_id = leaf.name
+        genome_id = leaf_metadata[protein_id]["genome_id"]  # equals contig_id in your current code
+
+        match = find_best_prophage_match(genome_id, prophage_df)
+        if match is None and not include_unmatched:
+            continue
+
+        # Defaults
+        prophage_start = _as_int(match["start"]) if match is not None else 0
+        prophage_end = _as_int(match["end"]) if match is not None else 0
+        prophage_length = max(0, prophage_end - prophage_start)
+
+        bacterial_id = str(match["contig_id"]) if match is not None and pd.notna(match.get("contig_id", None)) else "Unknown"
+        bacterial_contig_length = _as_int(match.get("contig_length", 0)) if match is not None else 0
+
+        genome_origin = _normalize_origin(str(match.get("is_mag", ""))) if match is not None else "Unknown"
+
+        # Family AFTER your MRCA propagation
+        crass_family = leaf_to_family.get(protein_id) or "Unknown"
+
+        # Taxonomy fields
+        phy, cls, ord_fam, lineage = get_taxonomy_fields_for_contig(bacterial_id, taxonomy_df)
+
+        rows.append(
+            {
+                "protein_id": protein_id,
+                "genome_id": genome_id,
+                "bacterial_id": bacterial_id,
+                "prophage_length": prophage_length,
+                "bacterial_contig_length": bacterial_contig_length,
+                "prophage_start": prophage_start,
+                "prophage_end": prophage_end,
+                "crassvirales_family": crass_family,
+                "genome_origin": genome_origin,
+                "bacterial_phylum": phy,
+                "bacterial_class": cls,
+                "bacterial_order_and_family": ord_fam,
+                "bacterial_taxonomy_lineage": lineage,
+            }
+        )
+
+    df = pd.DataFrame.from_records(rows)
+
+    # Deduplicate if the same (protein_id, genome_id) appears more than once (shouldn't, but safe):
+    if not df.empty:
+        df = df.sort_values(["protein_id", "prophage_length"], ascending=[True, False]).drop_duplicates(
+            subset=["protein_id", "genome_id"], keep="first"
+        )
+
+    # Set a friendly column order explicitly
+    cols = [
+        "protein_id",
+        "genome_id",
+        "bacterial_id",
+        "prophage_length",
+        "bacterial_contig_length",
+        "prophage_start",
+        "prophage_end",
+        "crassvirales_family",
+        "genome_origin",
+        "bacterial_phylum",
+        "bacterial_class",
+        "bacterial_order_and_family",
+        "bacterial_taxonomy_lineage",
+    ]
+    return df.reindex(columns=cols)
+
+
 def main():
     wd = "/mnt/c/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/blast_prophages_vs_ncbi_and_gtdb"
     crassus_output = "/mnt/c/crassvirales/CrassUS_old/CrassUS/results/prophage_analysis"
@@ -1403,8 +1570,27 @@ def main():
 
     # print(f"{feature_dict=}")
 
-    # NEW: propagate family annotation by MRCA
+    # NEW: propagate family annotation by MRCA (you already do this above)
     propagate_family_annotations_by_mrca(tree, leaf_to_family, family_to_color)
+
+    # === Build consistent metadata mapping for each leaf (already done above if you want to reuse it) ===
+    # leaf_metadata, contig_to_protein, genome_to_protein = build_leaf_metadata(tree)
+
+    prophage_dict, prophage_df = parse_prophage_table(prophage_table)
+    merged_df = merge_prophage_with_taxonomy(prophage_df, taxonomy_df)
+
+    # ### NEW: build & save unified annotation table for ggtree/gggenomes
+    annotation_df = build_crassphage_annotation_table(
+        tree=tree,
+        leaf_to_family=leaf_to_family,   # uses the propagated mapping
+        prophage_df=prophage_df,         # raw prophage rows (not the merged version)
+        taxonomy_df=taxonomy_df,         # has 'accession' and 'taxonomy'
+        include_unmatched=False          # set True to include leaves with no matched prophage
+    )
+
+    out_tsv = Path(f"{wd}/Crassphage_prophage_analysis_annotation.tsv")
+    annotation_df.to_csv(out_tsv, sep="\t", index=False)
+    print(f"[OK] Wrote {len(annotation_df)} rows → {out_tsv}")
 
     # === Build consistent metadata mapping for each leaf ===
     # leaf_metadata = build_leaf_metadata(tree)
