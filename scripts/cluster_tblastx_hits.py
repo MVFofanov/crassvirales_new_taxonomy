@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
 import argparse
+
 import pandas as pd
-from typing import List, Tuple
+
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Cluster tblastx hits into candidate prophage regions.")
@@ -11,7 +12,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--merge_distance", type=int, default=10000, help="Maximum distance to merge nearby hits.")
     return parser.parse_args()
 
-def merge_intervals(intervals: List[Tuple[int, int]], max_distance: int = 10000) -> List[Tuple[int, int]]:
+
+def merge_intervals(intervals: list[tuple[int, int]], max_distance: int = 10000) -> list[tuple[int, int]]:
     intervals.sort()
     merged = []
     current_start, current_end = intervals[0]
@@ -25,28 +27,40 @@ def merge_intervals(intervals: List[Tuple[int, int]], max_distance: int = 10000)
     merged.append((current_start, current_end))
     return merged
 
+
 def main():
     args = parse_arguments()
-    
+
     # BLAST columns for outfmt 6
     cols = [
-        "query", "subject", "pident", "length", "mismatch", "gapopen",
-        "qstart", "qend", "sstart", "send", "evalue", "bitscore"
+        "query",
+        "subject",
+        "pident",
+        "length",
+        "mismatch",
+        "gapopen",
+        "qstart",
+        "qend",
+        "sstart",
+        "send",
+        "evalue",
+        "bitscore",
     ]
-    
+
     df = pd.read_csv(args.blast_file, sep="\t", names=cols)
     df["s_min"] = df[["sstart", "send"]].min(axis=1)
     df["s_max"] = df[["sstart", "send"]].max(axis=1)
-    
+
     records = []
     for subject, group in df.groupby("subject"):
-        intervals = list(zip(group["s_min"], group["s_max"]))
+        intervals = list(zip(group["s_min"], group["s_max"], strict=False))
         merged = merge_intervals(intervals, max_distance=args.merge_distance)
         for start, end in merged:
             records.append((subject, int(start), int(end)))
-    
+
     out_df = pd.DataFrame(records, columns=["contig", "start", "end"])
     out_df.to_csv(args.output_bed, sep="\t", index=False, header=False)
+
 
 if __name__ == "__main__":
     main()

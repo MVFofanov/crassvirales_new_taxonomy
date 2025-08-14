@@ -1,24 +1,33 @@
 #!/usr/bin/env python3
 
 import argparse
-from typing import Dict, List, Set, Tuple
 from pathlib import Path
+
 from ete3 import Tree
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Annotate phylogenetic tree using iTOL-style file and extract unannotated Crassvirales leaves.")
+    parser = argparse.ArgumentParser(
+        description="Annotate phylogenetic tree using iTOL-style file and extract unannotated Crassvirales leaves."
+    )
     parser.add_argument("--tree_file", type=Path, required=True, help="Newick format tree file")
     parser.add_argument("--itol_annotation", type=Path, required=True, help="iTOL DATASET_STYLE annotation file")
-    parser.add_argument("--crassvirales_output", type=Path, required=True, help="Output .txt file with unannotated Crassvirales leaves")
-    parser.add_argument("--genome_output", type=Path, required=True, help="Output .txt file with genome IDs of unannotated Crassvirales leaves")
+    parser.add_argument(
+        "--crassvirales_output", type=Path, required=True, help="Output .txt file with unannotated Crassvirales leaves"
+    )
+    parser.add_argument(
+        "--genome_output",
+        type=Path,
+        required=True,
+        help="Output .txt file with genome IDs of unannotated Crassvirales leaves",
+    )
     return parser.parse_args()
 
 
-def parse_itol_annotation(file_path: Path) -> Tuple[Dict[str, str], Set[str]]:
-    leaf_to_family: Dict[str, str] = {}
-    crassvirales_families: Set[str] = set()
-    color_to_family: Dict[str, str] = {}
+def parse_itol_annotation(file_path: Path) -> tuple[dict[str, str], set[str]]:
+    leaf_to_family: dict[str, str] = {}
+    crassvirales_families: set[str] = set()
+    color_to_family: dict[str, str] = {}
 
     legend_labels = []
     legend_colors = []
@@ -56,7 +65,7 @@ def parse_itol_annotation(file_path: Path) -> Tuple[Dict[str, str], Set[str]]:
                 crassvirales_families.add(parts[0])
 
     # Build color → family map
-    for color, label in zip(legend_colors, legend_labels):
+    for color, label in zip(legend_colors, legend_labels, strict=False):
         if label not in {"NA", "outgroup"}:
             color_to_family[color] = label
 
@@ -79,28 +88,23 @@ def parse_itol_annotation(file_path: Path) -> Tuple[Dict[str, str], Set[str]]:
     return leaf_to_family, crassvirales_families
 
 
-
-def annotate_tree(tree: Tree, leaf_to_family: Dict[str, str]) -> None:
+def annotate_tree(tree: Tree, leaf_to_family: dict[str, str]) -> None:
     for leaf in tree.iter_leaves():
         if leaf.name in leaf_to_family and leaf_to_family[leaf.name] is not None:
             leaf.add_feature("family", leaf_to_family[leaf.name])
 
 
-def find_crassvirales_mrca(tree: Tree, crassvirales_families: Set[str]) -> Tree:
+def find_crassvirales_mrca(tree: Tree, crassvirales_families: set[str]) -> Tree:
     crass_leaves = [
-        leaf for leaf in tree.iter_leaves()
-        if any(leaf.name.startswith(fam) for fam in crassvirales_families)
+        leaf for leaf in tree.iter_leaves() if any(leaf.name.startswith(fam) for fam in crassvirales_families)
     ]
     if not crass_leaves:
         raise ValueError("No Crassvirales leaves found in the tree")
     return tree.get_common_ancestor(crass_leaves)
 
 
-def find_unannotated_leaves(mrca_node: Tree, leaf_to_family: Dict[str, str]) -> List[str]:
-    return sorted([
-        leaf.name for leaf in mrca_node.iter_leaves()
-        if leaf.name not in leaf_to_family
-    ])
+def find_unannotated_leaves(mrca_node: Tree, leaf_to_family: dict[str, str]) -> list[str]:
+    return sorted([leaf.name for leaf in mrca_node.iter_leaves() if leaf.name not in leaf_to_family])
 
 
 def main() -> None:
@@ -116,7 +120,7 @@ def main() -> None:
             out.write(name + "\n")
 
     # Extract unique genome IDs from leaf names
-    genome_ids = sorted(set('|'.join(name.split('|')[:-2]) for name in unannotated))
+    genome_ids = sorted(set("|".join(name.split("|")[:-2]) for name in unannotated))
 
     with args.genome_output.open("w") as out:
         for genome_id in genome_ids:

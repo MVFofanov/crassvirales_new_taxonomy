@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 
 from pathlib import Path
+
 import pandas as pd
 
 
 def read_length_table(path: Path) -> pd.DataFrame:
     """Reads a 2-column table with contig_id and length."""
     return pd.read_csv(path, sep="\t", names=["id", "length"], header=0, dtype={"id": str})
+
 
 def read_prophage_lengths(path: Path) -> pd.DataFrame:
     """Reads a 2-column table with prophage_id and length."""
@@ -21,19 +23,14 @@ def read_prophage_table(path: Path) -> pd.DataFrame:
         delim_whitespace=True,  # ✅ auto-detects spaces or tabs
         names=["prophage_id", "contig_id", "start", "end", "predicted_length"],
         header=None,
-        dtype={"contig_id": str}
+        dtype={"contig_id": str},
     )
 
 
-def add_lengths(
-    prophage_df: pd.DataFrame,
-    contig_lengths_df: pd.DataFrame
-) -> pd.DataFrame:
+def add_lengths(prophage_df: pd.DataFrame, contig_lengths_df: pd.DataFrame) -> pd.DataFrame:
     """Adds contig lengths to the prophage dataframe."""
     merged = prophage_df.merge(
-        contig_lengths_df.rename(columns={"id": "contig_id", "length": "contig_length"}),
-        on="contig_id",
-        how="left"
+        contig_lengths_df.rename(columns={"id": "contig_id", "length": "contig_length"}), on="contig_id", how="left"
     )
     return merged
 
@@ -63,15 +60,7 @@ def main():
     result_df = result_df.merge(prophage_lengths_df, on="prophage_id", how="left")
 
     # Reorder columns
-    columns = [
-        "prophage_id",
-        "contig_id",
-        "start",
-        "end",
-        "predicted_length",
-        "prophage_length",
-        "contig_length"
-    ]
+    columns = ["prophage_id", "contig_id", "start", "end", "predicted_length", "prophage_length", "contig_length"]
     result_df = result_df.reindex(columns=columns)
 
     # Save output

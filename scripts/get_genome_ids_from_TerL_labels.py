@@ -7,7 +7,9 @@ from pathlib import Path
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Remove last two fields from pipe-delimited TerL labels.")
     parser.add_argument("--input_file", required=True, type=Path, help="Input text file with TerL labels.")
-    parser.add_argument("--output_file", required=True, type=Path, help="Output file with genome IDs (without last two fields).")
+    parser.add_argument(
+        "--output_file", required=True, type=Path, help="Output file with genome IDs (without last two fields)."
+    )
     return parser.parse_args()
 
 
