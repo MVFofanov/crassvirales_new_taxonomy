@@ -106,12 +106,15 @@ ann <- ann_raw %>%
     bacterial_id            = as.character(bacterial_id),
     prophage_length         = suppressWarnings(as.numeric(prophage_length)),
     bacterial_contig_length = suppressWarnings(as.numeric(bacterial_contig_length)),
+    prophage_start         = suppressWarnings(as.numeric(prophage_start)),
+    prophage_end           = suppressWarnings(as.numeric(prophage_end)),
     genome_id               = as.character(genome_id),
     protein_id              = as.character(protein_id)
   ) %>%
   select(label, prophage_family, origin, bacterial_phylum, bacterial_class,
          bacterial_order_family, bacterial_tax_lineage, bacterial_id,
-         prophage_length, bacterial_contig_length, genome_id, protein_id)
+         prophage_length, bacterial_contig_length, prophage_start, prophage_end,
+         genome_id, protein_id)
 
 # ======================= 3) build tip metadata =======================
 itol <- suppressMessages(readr::read_tsv(itol_simplified_file, show_col_types = FALSE)) %>%
@@ -165,7 +168,7 @@ for (nd in collapse_nodes) p0 <- collapse(p0, node=nd)
 x_span <- diff(range(p0$data$x, na.rm=TRUE))
 
 lab_offset  <- 0.03 * x_span   # distance between tips and labels
-panel_shift <- 0.8 * x_span   # push block of panels to the right of labels, 0.060 * x_span
+panel_shift <- 1.5 * x_span   # push block of panels to the right of labels, 0.060 * x_span
 panel_gap   <- 0.15 * x_span   # uniform gap between panels, 0.012 * x_span
 panel_w     <- 0.045 * x_span   # SAME width for all panels (change this one number), 0.045 * x_span 
 
@@ -184,23 +187,28 @@ names(panel_offsets) <- panel_names
 # total width of the 4 heatmap panels
 panels_total_width <- sum(panel_widths) + panel_gap * (length(panel_widths) - 1)
 
-# bar region: sits to the RIGHT of the panels
-bar_gap   <- 1.2 * x_span     # space between last heatmap panel and bars, 0.06 * x_span
-bar_width <- 0.2 * x_span     # width of the barplot strip (tweak to taste), 0.08 * x_span 
+# ---- NEW: contig panel (gray bar + red prophage segment) ----
+contig_gap   <- 1.5 * x_span   # space between last heatmap panel and contig panel
+contig_width <- 0.6 * x_span   # width of contig panel
+contig_offset <- lab_offset + panel_shift + panels_total_width + contig_gap
 
-# left edge of the bar region
-len_offset <- lab_offset + panel_shift + panels_total_width + bar_gap
+# ---- length bar panel (to the right of contig panel) ----
+bar_gap   <- 0.05 * x_span
+bar_width <- 0.2 * x_span
+
+len_offset <- contig_offset + contig_width + bar_gap
 len_width  <- bar_width
 
-# ---- NEW: space for numeric values to the right of bars ----
-value_gap   <- 0.02 * x_span   # gap between bar end and text column
-value_width <- 0.06 * x_span   # width to reserve for numbers (tweak to taste)
-
-# x-position for the value column's left edge
+# ---- numbers to the right of length bars (you already added these) ----
+value_gap   <- 0.02 * x_span
+value_width <- 0.06 * x_span
 value_x     <- len_offset + len_width + value_gap
 
-# total width added to the tree canvas (include value column)
-total_width_all <- panels_total_width + bar_gap + bar_width + value_gap + value_width
+# total width added to the tree canvas (include contig panel + length bars + numbers)
+total_width_all <- (panels_total_width +
+                      contig_gap + contig_width +
+                      bar_gap + bar_width +
+                      value_gap + value_width)
 extra_right     <- 0.10 * x_span
 
 # ======================= 7) base tree =======================
@@ -266,6 +274,59 @@ cat("Origin values in side_df:\n");  print(table(side_df[["Genome origin"]], use
 # ======================= bar data for prophage length =======================
 # Get tip y-positions from the plotted tree (after collapse)
 pd_tips <- subset(p$data, isTip)
+
+# ============== contig panel data (one row per tip) ==============
+# Join the per-tip y back to contig fields
+contig_df <- pd_tips %>%
+  dplyr::select(label, y) %>%
+  dplyr::left_join(
+    tips_tbl_pruned %>%
+      dplyr::select(label, is_prophage, bacterial_contig_length,
+                    prophage_start, prophage_end),
+    by = "label"
+  ) %>%
+  dplyr::mutate(
+    contig_len = suppressWarnings(as.numeric(bacterial_contig_length)),
+    start_raw  = suppressWarnings(as.numeric(prophage_start)),
+    end_raw    = suppressWarnings(as.numeric(prophage_end))
+  )
+
+# We'll scale gray bar length by the maximum contig among prophages so rows are comparable
+contig_max <- suppressWarnings(max(contig_df$contig_len[contig_df$is_prophage %in% TRUE], na.rm = TRUE))
+if (!is.finite(contig_max) || contig_max <= 0) contig_max <- 1
+
+row_half <- 0.45  # visual thickness of per-tip bars
+
+# Background strip for every row across full contig panel width (light gray)
+contig_row_bg_df <- pd_tips %>%
+  dplyr::transmute(
+    x0   = contig_offset,
+    x1   = contig_offset + contig_width,
+    ymin = y - 0.5,
+    ymax = y + 0.5
+  )
+
+# Gray contig bars (length ∝ contig_len)
+contig_bar_df <- contig_df %>%
+  dplyr::filter(is_prophage %in% TRUE, is.finite(contig_len), contig_len > 0) %>%
+  dplyr::mutate(
+    bar_len = (contig_len / contig_max) * contig_width,
+    x0      = contig_offset,
+    x1      = contig_offset + bar_len,
+    ymin    = y - row_half,
+    ymax    = y + row_half
+  )
+
+# Red prophage segment within each gray bar (clamped to [0, contig_len])
+proph_rect_df <- contig_bar_df %>%
+  dplyr::mutate(
+    start_c = pmax(0, pmin(start_raw, contig_len)),
+    end_c   = pmax(start_c, pmin(end_raw, contig_len)),
+    # map [0, contig_len] to [0, bar_len] then shift by contig_offset
+    xr0     = contig_offset + (start_c / contig_len) * bar_len,
+    xr1     = contig_offset + (end_c   / contig_len) * bar_len
+  ) %>%
+  dplyr::filter(is.finite(xr0), is.finite(xr1), xr1 > xr0)
 
 bars_df <- pd_tips %>%
   dplyr::select(label, y) %>%
@@ -371,6 +432,31 @@ p <- gheatmap(
   width  = as.numeric(panel_widths["class"]),
   colnames = TRUE, colnames_position = "top",
   font.size = 3, hjust = 0, color = NA
+)
+
+# ======================= draw contig panel =======================
+# light background across the entire contig panel
+p <- p + geom_rect(
+  data = contig_row_bg_df,
+  aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax),
+  inherit.aes = FALSE,
+  fill = "#F2F2F2", color = NA
+)
+
+# gray contig bars (length ∝ bacterial_contig_length)
+p <- p + geom_rect(
+  data = contig_bar_df,
+  aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax),
+  inherit.aes = FALSE,
+  fill = "grey60", color = NA
+)
+
+# red prophage segment inside each contig bar
+p <- p + geom_rect(
+  data = proph_rect_df,
+  aes(xmin = xr0, xmax = xr1, ymin = ymin, ymax = ymax),
+  inherit.aes = FALSE,
+  fill = "#d62728", color = NA
 )
 
 # ======================= draw length bars panel =======================
