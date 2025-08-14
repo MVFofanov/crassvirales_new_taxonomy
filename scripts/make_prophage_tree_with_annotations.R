@@ -165,18 +165,36 @@ for (nd in collapse_nodes) p0 <- collapse(p0, node=nd)
 x_span <- diff(range(p0$data$x, na.rm=TRUE))
 
 lab_offset  <- 0.03 * x_span   # distance between tips and labels
-panel_shift <- 0.5 * x_span   # push block of panels to the right of labels, 0.060 * x_span
-panel_gap   <- 0.1 * x_span   # uniform gap between panels, 0.012 * x_span
+panel_shift <- 0.8 * x_span   # push block of panels to the right of labels, 0.060 * x_span
+panel_gap   <- 0.15 * x_span   # uniform gap between panels, 0.012 * x_span
 panel_w     <- 0.045 * x_span   # SAME width for all panels (change this one number), 0.045 * x_span 
 
-panel_names   <- c("family","origin","phylum","class")
-panel_widths  <- setNames(rep(panel_w, length(panel_names)), panel_names)
-cum_left      <- c(0, cumsum(head(panel_widths, -1) + panel_gap))
-panel_offsets <- lab_offset + panel_shift + cum_left
+## ---- panel layout (now with a 'len' panel) ----
+# widths: keep existing four panels at panel_w; give length panel a bit more room
+len_width <- 0.06 * x_span  # tweak to taste
+
+# ---- panel layout: 4 heatmap panels only ----
+panel_names  <- c("family","origin","phylum","class")
+panel_widths <- setNames(rep(panel_w, length(panel_names)), panel_names)
+
+cum_left       <- c(0, cumsum(head(panel_widths, -1) + panel_gap))
+panel_offsets  <- lab_offset + panel_shift + cum_left
 names(panel_offsets) <- panel_names
 
-total_panels_width <- sum(panel_widths) + panel_gap * (length(panel_widths) - 1)
-extra_right        <- 0.10 * x_span
+# total width of the 4 heatmap panels
+panels_total_width <- sum(panel_widths) + panel_gap * (length(panel_widths) - 1)
+
+# bar region: sits to the RIGHT of the panels
+bar_gap   <- 1.2 * x_span     # space between last heatmap panel and bars, 0.06 * x_span
+bar_width <- 0.2 * x_span     # width of the barplot strip (tweak to taste), 0.08 * x_span 
+
+# left edge of the bar region
+len_offset <- lab_offset + panel_shift + panels_total_width + bar_gap
+len_width  <- bar_width
+
+# total width added to the tree canvas
+total_width_all <- panels_total_width + bar_gap + bar_width
+extra_right     <- 0.10 * x_span
 
 # ======================= 7) base tree =======================
 p <- ggtree(tr_pruned, layout="rectangular") %<+% tips_tbl_pruned +
@@ -207,7 +225,7 @@ p <- p +
   scale_color_manual(values = family_palette, na.value = "#BDBDBD") +
   guides(color = guide_legend(title = "Crassvirales family (tips)",
                               override.aes = list(size = 3, alpha = 1), order = 1)) +
-  xlim_tree(max(p$data$x, na.rm=TRUE) + lab_offset + panel_shift + total_panels_width + extra_right)
+  xlim_tree(max(p$data$x, na.rm=TRUE) + lab_offset + panel_shift + total_width_all + extra_right)
 
 # ======================= 8) side-table (prophages only; exact tip order) =======================
 side_df <- tips_tbl_pruned %>%
@@ -237,6 +255,55 @@ class_df[[1]]  <- factor(class_df[[1]],  levels = names(class_color_map))
 
 cat("Origin values in ann:\n");      print(table(ann$origin, useNA="ifany"))
 cat("Origin values in side_df:\n");  print(table(side_df[["Genome origin"]], useNA="ifany"))
+
+# ======================= bar data for prophage length =======================
+# Get tip y-positions from the plotted tree (after collapse)
+pd_tips <- subset(p$data, isTip)
+
+bars_df <- pd_tips %>%
+  dplyr::select(label, y) %>%
+  dplyr::left_join(tips_tbl_pruned %>% dplyr::select(label, prophage_length), by = "label") %>%
+  dplyr::mutate(len_kb = prophage_length / 1000) %>%
+  dplyr::filter(!is.na(len_kb))
+
+# scale lengths into the allocated width of the 'len' panel
+# scale lengths into the allocated width of the bar region
+len_max <- max(bars_df$len_kb, na.rm = TRUE)
+if (!is.finite(len_max) || len_max <= 0) len_max <- 1
+
+# len_offset / len_width were defined in the layout block above
+bars_df <- bars_df %>%
+  dplyr::mutate(
+    x0   = len_offset,
+    x1   = len_offset + (len_kb / len_max) * len_width,
+    ymin = y - 0.45,
+    ymax = y + 0.45
+  )
+
+len_bg_df <- pd_tips %>%
+  dplyr::transmute(
+    x0 = len_offset, x1 = len_offset + len_width,
+    ymin = y - 0.5,   ymax = y + 0.5
+  )
+
+
+# a slim bar height that fits each tip row (tweak 0.45–0.48 if you want thicker bars)
+row_half <- 0.45
+
+bars_df <- bars_df %>%
+  dplyr::mutate(
+    x0   = len_offset,
+    x1   = len_offset + (len_kb / len_max) * len_width,
+    ymin = y - row_half,
+    ymax = y + row_half
+  )
+
+# light background strips for the whole 'len' panel (so NA rows show as light gray)
+len_bg_df <- pd_tips %>%
+  dplyr::transmute(
+    x0 = len_offset, x1 = len_offset + len_width,
+    ymin = y - 0.5,   ymax = y + 0.5
+  )
 
 # ======================= 9) draw panels (robust, one combined scale) =======================
 
@@ -286,6 +353,31 @@ p <- gheatmap(
   colnames = TRUE, colnames_position = "top",
   font.size = 3, hjust = 0, color = NA
 )
+
+# ======================= draw length bars panel =======================
+# background for all tip rows in the length panel
+p <- p + geom_rect(
+  data = len_bg_df,
+  aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax),
+  inherit.aes = FALSE,
+  fill = "#F2F2F2", color = NA
+)
+
+# actual bars (use a fixed fill to keep independent of the heatmap fill scale)
+p <- p + geom_rect(
+  data = bars_df,
+  aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax),
+  inherit.aes = FALSE,
+  fill = "grey35", color = NA
+)
+
+# (optional) a small title above the bar panel — comment out if not needed
+# p <- p + annotate(
+#   "text",
+#   x = len_offset, y = max(pd_tips$y, na.rm = TRUE) + 2,
+#   label = "Prophage length (kb)",
+#   hjust = 0, size = 3
+# )
 
 # a single fill scale that knows about all prefixed values
 p <- p + scale_fill_manual(
