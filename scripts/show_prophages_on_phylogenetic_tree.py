@@ -1543,6 +1543,65 @@ def build_crassphage_annotation_table(
     ]
     return df.reindex(columns=cols)
 
+def export_itol_simplified_table(itol_path: Path, out_path: Optional[Path] = None) -> Path:
+    """
+    Parse an iTOL DATASET_STYLE file and save a simple TSV with:
+      genome_id    crassvirales_family    crassvirales_family_color
+
+    - Uses LEGEND_COLORS/LEGEND_LABELS to map colors → family names.
+    - Includes special labels like 'outgroup' and 'NA' if they are in the legend.
+    - Only emits leaf lines (those with: <name>  label  node  <color> ...).
+    """
+    legend_colors: List[str] = []
+    legend_labels: List[str] = []
+    color_to_family: Dict[str, str] = {}
+
+    rows: List[Dict[str, str]] = []
+    in_data = False
+
+    with itol_path.open("r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.rstrip("\n")
+            if not line:
+                continue
+
+            # Read legend
+            if line.startswith("LEGEND_COLORS"):
+                legend_colors = line.split("\t")[1:]
+                continue
+            if line.startswith("LEGEND_LABELS"):
+                legend_labels = line.split("\t")[1:]
+                continue
+            if line.startswith("DATA"):
+                in_data = True
+                # build color → family map when we hit DATA (legend should be known by now)
+                if legend_colors and legend_labels:
+                    # keep everything, including outgroup/NA if present
+                    color_to_family = {c: l for c, l in zip(legend_colors, legend_labels)}
+                continue
+
+            if not in_data:
+                continue
+
+            parts = line.split("\t")
+            # Leaf style lines look like: <leaf>  label  node  <#RRGGBB>  ...
+            if len(parts) >= 4 and parts[1] == "label" and parts[2] == "node":
+                genome_id = parts[0]
+                color = parts[3]
+                fam = color_to_family.get(color, "Unknown")
+                rows.append(
+                    {
+                        "genome_id": genome_id,
+                        "crassvirales_family": fam,
+                        "crassvirales_family_color": color,
+                    }
+                )
+            # ignore 'branch  clade  <color>' and other non-leaf lines
+
+    out_path = out_path or itol_path.parent / "TerL_iToL_simplified.txt"
+    pd.DataFrame(rows).to_csv(out_path, sep="\t", index=False)
+    return out_path
+
 
 def main():
     wd = "/mnt/c/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/blast_prophages_vs_ncbi_and_gtdb"
@@ -1567,6 +1626,13 @@ def main():
     taxonomy_df = pd.read_csv(taxonomy_file, sep="\t", dtype=str)
 
     feature_dict = load_functional_annotation(str(functional_annotation_file))
+
+    # Save simplified iTOL table in the same directory
+    simplified_path = export_itol_simplified_table(
+        itol_path=itol_annotation,
+        out_path=itol_annotation.parent / "TerL_iToL_simplified.txt"
+    )
+    print(f"[OK] Wrote simplified iTOL table → {simplified_path}")
 
     # print(f"{feature_dict=}")
 
