@@ -255,7 +255,7 @@ extra_right <- 0.10 * x_span
 # --- 7) base tree ---
 p <- ggtree(tr_pruned, layout="rectangular") %<+% tips_tbl_pruned +
   theme_tree() +                                # <— was theme_tree2(); removes the long x-axis
-  geom_tippoint(aes(color = family), size = 1.2, alpha = 0.9) +
+  geom_tippoint(aes(color = family), size = 1.2, alpha = 0.9, show.legend = FALSE) +
   ggtitle("TerL — Crassvirales clade (pruned), non-prophage clades collapsed",
           subtitle = "Triangles = collapsed clades; numbers = # tips inside")
 
@@ -298,9 +298,9 @@ p <- p +
     show.legend = FALSE
   ) +
   geom_tiplab(size = 2, align = TRUE, offset = lab_offset, linesize = 0) +
-  scale_color_manual(values = family_palette, na.value = "#BDBDBD") +
-  guides(color = guide_legend(title = "Crassvirales family (tips)",
-                              override.aes = list(size = 3, alpha = 1), order = 1)) +
+  scale_color_manual(values = family_palette, na.value = "#BDBDBD", guide = "none") +
+  # guides(color = guide_legend(title = "Crassvirales family (tips)",
+  #                             override.aes = list(size = 3, alpha = 1), order = 1)) +
   xlim_tree(max(p$data$x, na.rm=TRUE) + lab_offset + panel_shift + total_width_all + extra_right)
 
 # -------- helper to choose a nice kb step --------
@@ -398,16 +398,6 @@ p <- p +
             aes(x = x_lab, y = y_gene_sc - (tick_len + label_pad), label = lab, hjust = hjust),
             inherit.aes = FALSE, vjust = 1, size = label_size)
 
-# ticks + labels (LENGTH, kb)
-# p <- p +
-#   geom_segment(data = ticks_l,
-#                aes(x = x, xend = x, y = y_len_sc - tick_len, yend = y_len_sc + tick_len),
-#                inherit.aes = FALSE, linewidth = tick_lwd) +
-#   geom_text(data = ticks_l,
-#             aes(x = x_lab, y = y_len_sc - (tick_len + label_pad), label = lab, hjust = hjust),
-#             inherit.aes = FALSE, vjust = 1, size = label_size)
-
-
 # --- OPTIONAL: faint vertical gridlines inside each panel to aid comparison ---
 p <- p +
   geom_segment(data = ticks_c,
@@ -416,10 +406,6 @@ p <- p +
   geom_segment(data = ticks_g,
                aes(x = x, xend = x, y = ymin_rows, yend = ymax_rows),
                inherit.aes = FALSE, alpha = GRID_ALPHA)
-  # geom_segment(data = ticks_l,
-  #              aes(x = x, xend = x, y = ymin_rows, yend = ymax_rows),
-  #              inherit.aes = FALSE, alpha = GRID_ALPHA)
-
 
 # -------- y positions for scale bars below the tree --------
 y_min_tip <- min(pd$y[pd$isTip], na.rm = TRUE)
@@ -430,82 +416,7 @@ y_gene_sc   <- y_contig_sc - row_gap  # under "Prophage genomic map"
 y_len_sc    <- y_gene_sc   - row_gap  # under "Prophage length"
 y_bottom_all <- y_len_sc - 0.6        # bottom limit to include all scales
 
-# -------- TREE scale (you already add one; move it here to align rows) --------
-# tree_xmin <- min(pd$x, na.rm = TRUE); tree_xmax <- max(pd$x, na.rm = TRUE)
-# tree_span <- tree_xmax - tree_xmin
-# p <- p + ggtree::geom_treescale(
-#   x = tree_xmin + 0.02 * tree_span,
-#   y = y_tree_sc,
-#   width = 0.12 * tree_span,
-#   linesize = 0.5, fontsize = 3
-# )
 
-# # -------- 1) Scale under "Prophage coordinates" (in kb) --------
-# contig_max_kb <- contig_max / 1000
-# step_kb_c <- nice_kb_step(contig_max_kb)
-# # convert 'step_kb_c' into plot units for the contig panel
-# px_kb_c <- (step_kb_c*1000 / contig_max) * contig_width
-# x0_c <- contig_offset + 0.05 * contig_width
-# x1_c <- x0_c + px_kb_c
-# p <- p + annotate("segment", x=x0_c, xend=x1_c, y=y_contig_sc, yend=y_contig_sc, linewidth=0.4)
-# p <- p + annotate("segment", x=x0_c, xend=x0_c, y=y_contig_sc-0.25, yend=y_contig_sc+0.25, linewidth=0.4)
-# p <- p + annotate("segment", x=x1_c, xend=x1_c, y=y_contig_sc-0.25, yend=y_contig_sc+0.25, linewidth=0.4)
-# p <- p + annotate("text", x=(x0_c+x1_c)/2, y=y_contig_sc-0.45,
-#                   label=paste0(step_kb_c, " kb"), vjust=1, size=3)
-# 
-# # (Optional: make the column title match units)
-# # Change your earlier title to "Prophage coordinates, kb"
-# 
-# # -------- 2) Scale under "Prophage genomic map" (in kb, global pl_max) --------
-# pl_max_kb <- pl_max / 1000
-# step_kb_g <- nice_kb_step(pl_max_kb)
-# px_kb_g <- (step_kb_g*1000 / pl_max) * gene_width
-# x0_g <- gene_offset + 0.05 * gene_width
-# x1_g <- x0_g + px_kb_g
-# p <- p + annotate("segment", x=x0_g, xend=x1_g, y=y_gene_sc, yend=y_gene_sc, linewidth=0.4)
-# p <- p + annotate("segment", x=x0_g, xend=x0_g, y=y_gene_sc-0.25, yend=y_gene_sc+0.25, linewidth=0.4)
-# p <- p + annotate("segment", x=x1_g, xend=x1_g, y=y_gene_sc-0.25, yend=y_gene_sc+0.25, linewidth=0.4)
-# p <- p + annotate("text", x=(x0_g+x1_g)/2, y=y_gene_sc-0.45,
-#                   label=paste0(step_kb_g, " kb"), vjust=1, size=3)
-# 
-# # -------- 3) Scale under "Prophage length" bars (already in kb) --------
-# # len_max is in kb already (you computed bars_df$len_kb), so no /1000 here
-# step_kb_l <- nice_kb_step(len_max)
-# px_kb_l <- (step_kb_l / len_max) * len_width
-# x0_l <- len_offset + 0.05 * len_width
-# x1_l <- x0_l + px_kb_l
-# p <- p + annotate("segment", x=x0_l, xend=x1_l, y=y_len_sc, yend=y_len_sc, linewidth=0.4)
-# p <- p + annotate("segment", x=x0_l, xend=x0_l, y=y_len_sc-0.25, yend=y_len_sc+0.25, linewidth=0.4)
-# p <- p + annotate("segment", x=x1_l, xend=x1_l, y=y_len_sc-0.25, yend=y_len_sc+0.25, linewidth=0.4)
-# p <- p + annotate("text", x=(x0_l+x1_l)/2, y=y_len_sc-0.45,
-#                   label=paste0(step_kb_l, " kb"), vjust=1, size=3)
-
-
-# y-positions of collapsed triangles + their family
-# left_pad  <- 0.75 * as.numeric(panel_widths["family"])  # 25% of panel width
-# right_pad <- 0.5 * as.numeric(panel_widths["family"])  # keep full width, or try 0.05
-# 
-# collapsed_rows_df <- lab_pos %>%
-#   dplyr::select(node, y) %>%
-#   inner_join(clade_fam_tbl, by = "node") %>%
-#   mutate(
-#     fam_pref   = paste0("FAM:", fam),
-#     panel_left = as.numeric(panel_offsets["family"]),
-#     panel_w    = as.numeric(panel_widths["family"]),
-#     x0   = panel_left + left_pad,
-#     x1   = panel_left + panel_w - right_pad,
-#     ymin = y - 0.5, ymax = y + 0.5
-#   )
-# 
-# 
-# # paint a single tile in the first panel for each collapsed clade
-# p <- p + geom_rect(
-#   data = collapsed_rows_df,
-#   aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax, fill = fam_pref),
-#   inherit.aes = FALSE, color = NA
-# )
-
-# ======================= 8) side-table (prophages only; exact tip order) =======================
 # ======================= 8) side-table (use family_all for everyone) =======================
 side_df <- tips_tbl_filled %>%
   transmute(
@@ -737,54 +648,99 @@ gene_polys <- gene_df %>%
 
 
 
-# ======================= 9) draw panels (robust, one combined scale) =======================
+# --- 9) draw panels — separate legends for each heatmap & keep tree legend ---
 
-# helper: add panel-specific prefixes but keep NAs as NA
-add_prefix <- function(x, pref) ifelse(is.na(x), NA_character_, paste0(pref, as.character(x)))
-
-# make prefixed copies of each panel column
-family_df_pref <- family_df; family_df_pref[[1]] <- add_prefix(family_df_pref[[1]], "FAM:")
-origin_df_pref <- origin_df; origin_df_pref[[1]] <- add_prefix(origin_df_pref[[1]], "ORG:")
-phylum_df_pref <- phylum_df; phylum_df_pref[[1]] <- add_prefix(phylum_df_pref[[1]], "PHY:")
-class_df_pref  <- class_df;  class_df_pref[[1]]  <- add_prefix(class_df_pref[[1]],  "CLS:")
-
-# one big palette = union of all palettes with matching prefixes
-panel_palette <- c(
-  setNames(family_palette, paste0("FAM:", names(family_palette))),
-  setNames(origin_palette, paste0("ORG:", names(origin_palette))),
-  setNames(phylum_color_map, paste0("PHY:", names(phylum_color_map))),
-  setNames(class_color_map,  paste0("CLS:", names(class_color_map)))
-)
-
-# draw the four panels (no ggnewscale; same offsets/widths you computed)
+# 9a) FAMILY heatmap + its own legend
 p <- gheatmap(
-  p, family_df_pref,
+  p, family_df,
   offset = as.numeric(panel_offsets["family"]),
   width  = as.numeric(panel_widths["family"]),
-  colnames = FALSE, colnames_position = "top",
-  font.size = 3, hjust = 0, color = NA
+  colnames = FALSE, font.size = 3, hjust = 0, color = NA
 )
+p <- p + scale_fill_manual(
+  values = family_palette,
+  breaks = names(family_palette),
+  drop = FALSE, na.value = "#F2F2F2",
+  name = "Crassvirales families",
+  guide = guide_legend(order = 2, ncol = 1, byrow = TRUE, title.position = "top")
+)
+
+# --- collapsed clade badges drawn using the FAMILY fill scale ---
+gb <- ggplot_build(p)
+tile_layers <- which(vapply(p$layers, function(L) inherits(L$geom, "GeomTile"), logical(1)))
+fam_built   <- gb$data[[tile_layers[1]]]          # first heatmap = family
+fam_left    <- min(fam_built$xmin, na.rm = TRUE)
+fam_right   <- max(fam_built$xmax, na.rm = TRUE)
+
+collapsed_rows_df <- lab_pos %>%
+  dplyr::select(node, y) %>%
+  dplyr::inner_join(clade_fam_tbl, by = "node") %>%   # gives 'fam'
+  dplyr::mutate(x0 = fam_left, x1 = fam_right, ymin = y - 0.5, ymax = y + 0.5)
+
+p <- p + geom_rect(
+  data = collapsed_rows_df,
+  aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax, fill = fam),
+  inherit.aes = FALSE, color = NA
+)
+
+# 9b) ORIGIN heatmap + its own legend
+p <- p + ggnewscale::new_scale_fill()
 p <- gheatmap(
-  p, origin_df_pref,
+  p, origin_df,
   offset = as.numeric(panel_offsets["origin"]),
   width  = as.numeric(panel_widths["origin"]),
-  colnames = FALSE, colnames_position = "top",
-  font.size = 3, hjust = 0, color = NA
+  colnames = FALSE, font.size = 3, hjust = 0, color = NA
 )
+p <- p + scale_fill_manual(
+  values = origin_palette,
+  breaks = names(origin_palette),
+  drop = FALSE, na.value = "#F2F2F2",
+  name = "Genome origin",
+  guide = guide_legend(order = 3, ncol = 1, byrow = TRUE, title.position = "top")
+)
+
+# 9c) PHYLUM heatmap + its own legend
+p <- p + ggnewscale::new_scale_fill()
 p <- gheatmap(
-  p, phylum_df_pref,
+  p, phylum_df,
   offset = as.numeric(panel_offsets["phylum"]),
   width  = as.numeric(panel_widths["phylum"]),
-  colnames = FALSE, colnames_position = "top",
-  font.size = 3, hjust = 0, color = NA
+  colnames = FALSE, font.size = 3, hjust = 0, color = NA
 )
+p <- p + scale_fill_manual(
+  values = phylum_color_map,
+  breaks = names(phylum_color_map),
+  drop = FALSE, na.value = "#F2F2F2",
+  name = "Bacterial phylum",
+  guide = guide_legend(order = 4, ncol = 1, byrow = TRUE, title.position = "top")
+)
+
+# 9d) CLASS heatmap + its own legend
+p <- p + ggnewscale::new_scale_fill()
 p <- gheatmap(
-  p, class_df_pref,
+  p, class_df,
   offset = as.numeric(panel_offsets["class"]),
   width  = as.numeric(panel_widths["class"]),
-  colnames = FALSE, colnames_position = "top",
-  font.size = 3, hjust = 0, color = NA
+  colnames = FALSE, font.size = 3, hjust = 0, color = NA
 )
+p <- p + scale_fill_manual(
+  values = class_color_map,
+  breaks = names(class_color_map),
+  drop = FALSE, na.value = "#F2F2F2",
+  name = "Bacterial class",
+  guide = guide_legend(order = 5, ncol = 1, byrow = TRUE, title.position = "top")
+)
+
+# Make all legends appear as one vertical column on the right
+p <- p + theme(
+  legend.position = "right",
+  legend.box = "vertical",
+  legend.key.height = unit(4, "mm"),
+  legend.key.width  = unit(4, "mm"),
+  legend.title = element_text(size = 9, face = "bold"),
+  legend.text  = element_text(size = 8)
+)
+
 
 # --- panel titles (rotated where requested) ---
 # Build once to read the true x extents of each heatmap panel
@@ -867,16 +823,6 @@ p <- p + annotate(
 
 # Ensure the computed y_top is included in limits
 p <- p + expand_limits(y = y_top + 1)
-
-
-
-## --- collapsed clade badges inside the FAMILY panel ---
-# anchor at the right edge of the tree (after collapse)
-## --- collapsed clade badges exactly over the FAMILY panel ---
-# left edge of the tree only (ignore heatmap layers)
-## --- collapsed clade badges exactly over the FAMILY panel ---
-
-## --- collapsed clade badges exactly over the FAMILY panel ---
 
 ## --- collapsed clade badges exactly matching FAMILY panel width ---
 
@@ -969,29 +915,13 @@ p <- p + geom_text(
   size = 2.6
 )
 
-# (optional) a small title above the bar panel — comment out if not needed
-# p <- p + annotate(
-#   "text",
-#   x = len_offset, y = max(pd_tips$y, na.rm = TRUE) + 2,
-#   label = "Prophage length (kb)",
-#   hjust = 0, size = 3
+# # a single fill scale that knows about all prefixed values
+# p <- p + scale_fill_manual(
+#   values = panel_palette,
+#   na.value = "#F2F2F2",
+#   drop = FALSE,
+#   name = "Side panels"
 # )
-
-# a single fill scale that knows about all prefixed values
-p <- p + scale_fill_manual(
-  values = panel_palette,
-  na.value = "#F2F2F2",
-  drop = FALSE,
-  name = "Side panels"
-)
-
-# --- draw length bars + numbers (you already have these) ---
-# p <- p + geom_rect(data = len_bg_df,  aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax),
-#                    inherit.aes = FALSE, fill = "#F2F2F2", color = NA)
-# p <- p + geom_rect(data = bars_df,    aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax),
-#                    inherit.aes = FALSE, fill = "grey35", color = NA)
-# p <- p + geom_text(data = labels_df,  aes(x = x_text, y = y, label = lab),
-#                    inherit.aes = FALSE, hjust = 0, vjust = 0.5, size = 2.6)
 
 # --- NOW add the gene map panel to the right ---
 # ggnewscale::new_scale_fill()  # start a fresh fill scale so we don't replace the heatmap scale
@@ -1003,13 +933,6 @@ p <- p + geom_rect(
   aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax),
   inherit.aes = FALSE, fill = "#F2F2F2", color = NA
 )
-
-# # gene rectangles (red if yutin != "", otherwise grey)
-# p <- p + geom_rect(
-#   data = gene_df,
-#   aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax, fill = fill_gene),
-#   inherit.aes = FALSE, color = NA
-# ) + scale_fill_identity(guide = "none")
 
 # gene arrows as polygons (respect strand direction)
 p <- p + geom_polygon(
