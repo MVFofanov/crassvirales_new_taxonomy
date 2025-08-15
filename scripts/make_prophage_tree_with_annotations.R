@@ -182,6 +182,19 @@ for (nd in collapse_nodes) {
   }
 }
 
+# Family call per collapsed clade (mode among descendants)
+clade_fam_tbl <- lapply(collapse_nodes, function(nd) {
+  desc <- ape::extract.clade(tr_pruned, nd)$tip.label
+  fams <- tips_tbl_pruned$family[match(desc, tips_tbl_pruned$label)]
+  fams_clean <- fams[!is.na(fams) & fams != "Unknown" & !(fams %in% NOT_CV_TAGS)]
+  fam_mode <- if (length(fams_clean) > 0) {
+    as.character(names(sort(table(fams_clean), decreasing = TRUE))[1])
+  } else {
+    "Unknown"
+  }
+  tibble(node = nd, fam = fam_mode)
+}) %>% bind_rows()
+
 
 # ======================= 6) geometry for labels & panels =======================
 # preview (collapsed) to measure in data units
@@ -268,6 +281,30 @@ p <- p +
   guides(color = guide_legend(title = "Crassvirales family (tips)",
                               override.aes = list(size = 3, alpha = 1), order = 1)) +
   xlim_tree(max(p$data$x, na.rm=TRUE) + lab_offset + panel_shift + total_width_all + extra_right)
+
+# y-positions of collapsed triangles + their family
+# left_pad  <- 0.75 * as.numeric(panel_widths["family"])  # 25% of panel width
+# right_pad <- 0.5 * as.numeric(panel_widths["family"])  # keep full width, or try 0.05
+# 
+# collapsed_rows_df <- lab_pos %>%
+#   dplyr::select(node, y) %>%
+#   inner_join(clade_fam_tbl, by = "node") %>%
+#   mutate(
+#     fam_pref   = paste0("FAM:", fam),
+#     panel_left = as.numeric(panel_offsets["family"]),
+#     panel_w    = as.numeric(panel_widths["family"]),
+#     x0   = panel_left + left_pad,
+#     x1   = panel_left + panel_w - right_pad,
+#     ymin = y - 0.5, ymax = y + 0.5
+#   )
+# 
+# 
+# # paint a single tile in the first panel for each collapsed clade
+# p <- p + geom_rect(
+#   data = collapsed_rows_df,
+#   aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax, fill = fam_pref),
+#   inherit.aes = FALSE, color = NA
+# )
 
 # ======================= 8) side-table (prophages only; exact tip order) =======================
 # ======================= 8) side-table (use family_all for everyone) =======================
@@ -538,6 +575,46 @@ p <- gheatmap(
   colnames = TRUE, colnames_position = "top",
   font.size = 3, hjust = 0, color = NA
 )
+
+## --- collapsed clade badges inside the FAMILY panel ---
+# anchor at the right edge of the tree (after collapse)
+## --- collapsed clade badges exactly over the FAMILY panel ---
+# left edge of the tree only (ignore heatmap layers)
+## --- collapsed clade badges exactly over the FAMILY panel ---
+
+# use the full tree right edge (includes collapsed triangles)
+tree_right <- max(p$data$x, na.rm = TRUE)
+
+# compute the exact family panel span used by gheatmap()
+fam_left   <- tree_right + as.numeric(panel_offsets["family"])
+fam_right  <- fam_left   + as.numeric(panel_widths["family"])
+
+# optional tiny padding (set to 0 for edge-to-edge)
+pad <- 0 * x_span
+
+collapsed_rows_df <- lab_pos %>%
+  dplyr::select(node, y) %>%
+  inner_join(clade_fam_tbl, by = "node") %>%
+  mutate(
+    fam_pref = paste0("FAM:", fam),
+    x0 = fam_left  + pad,
+    x1 = fam_right - pad,
+    ymin = y - 0.5,
+    ymax = y + 0.5
+  )
+
+# draw on top of the family panel using the same fill scale
+p <- p + geom_rect(
+  data = collapsed_rows_df,
+  aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax, fill = fam_pref),
+  inherit.aes = FALSE,
+  color = NA
+)
+
+# --- debug (optional): uncomment to verify alignment
+# p <- p + geom_vline(xintercept = fam_left,  linetype = 2) +
+#          geom_vline(xintercept = fam_right, linetype = 2)
+
 
 # ======================= draw contig panel =======================
 # light background across the entire contig panel
