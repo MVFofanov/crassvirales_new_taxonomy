@@ -562,30 +562,114 @@ p <- gheatmap(
   p, family_df_pref,
   offset = as.numeric(panel_offsets["family"]),
   width  = as.numeric(panel_widths["family"]),
-  colnames = TRUE, colnames_position = "top",
+  colnames = FALSE, colnames_position = "top",
   font.size = 3, hjust = 0, color = NA
 )
 p <- gheatmap(
   p, origin_df_pref,
   offset = as.numeric(panel_offsets["origin"]),
   width  = as.numeric(panel_widths["origin"]),
-  colnames = TRUE, colnames_position = "top",
+  colnames = FALSE, colnames_position = "top",
   font.size = 3, hjust = 0, color = NA
 )
 p <- gheatmap(
   p, phylum_df_pref,
   offset = as.numeric(panel_offsets["phylum"]),
   width  = as.numeric(panel_widths["phylum"]),
-  colnames = TRUE, colnames_position = "top",
+  colnames = FALSE, colnames_position = "top",
   font.size = 3, hjust = 0, color = NA
 )
 p <- gheatmap(
   p, class_df_pref,
   offset = as.numeric(panel_offsets["class"]),
   width  = as.numeric(panel_widths["class"]),
-  colnames = TRUE, colnames_position = "top",
+  colnames = FALSE, colnames_position = "top",
   font.size = 3, hjust = 0, color = NA
 )
+
+# --- panel titles (rotated where requested) ---
+# Build once to read the true x extents of each heatmap panel
+# --- PANEL TITLES (rotated where requested) ---
+
+# Build once to read the true x extents of each heatmap panel
+gb <- ggplot_build(p)
+tile_layers <- which(vapply(p$layers, function(L) inherits(L$geom, "GeomTile"), logical(1)))
+stopifnot(length(tile_layers) >= 4)
+
+# Centers of the four heatmap panels, in the order added
+built_tiles <- gb$data[tile_layers[1:4]]
+x_centers <- vapply(built_tiles, function(d) {
+  (min(d$xmin, na.rm=TRUE) + max(d$xmax, na.rm=TRUE)) / 2
+}, numeric(1))
+
+# Give headroom and disable clipping so titles are not cropped
+# Compute a smaller headroom above the top tip
+y_max <- max(subset(p$data, isTip)$y, na.rm = TRUE)
+tip_n <- Ntip(tr_pruned)
+
+# TUNE THESE THREE NUMBERS to control top space:
+TITLE_PAD_TIPS <- 15     # was 10% of tips; try 3–6
+TOP_EXPAND     <- 0.1   # was 0.18; try 0.02–0.05
+TOP_MARGIN_MM  <- 10      # was 20 mm; try 6–10
+
+y_top <- y_max + TITLE_PAD_TIPS
+
+p <- p +
+  coord_cartesian(ylim = c(NA, y_top + 0.5), clip = "off") +  # set an explicit top limit
+  scale_y_continuous(expand = expansion(mult = c(0.02, TOP_EXPAND))) +
+  theme(plot.margin = margin(t = TOP_MARGIN_MM, r = 6, b = 6, l = 6, unit = "mm"))
+
+# (IMPORTANT) Remove this line from your code (it double-adds space):
+# p <- p + expand_limits(y = y_top + 1)
+
+# 4 heatmap panel titles (rotated 90°)
+titles_df <- data.frame(
+  x = x_centers,
+  y = y_top,
+  label = c("Crassvirales family", "Genome origin", "Bacterial phylum", "Bacterial class")
+)
+p <- p + geom_text(
+  data = titles_df,
+  aes(x = x, y = y, label = label),
+  angle = 90, vjust = 0, hjust = 0.5,
+  size = 3.2, fontface = "bold"
+)
+
+# Other panel titles
+# Prophage coordinates (contig panel) — rotated 90°
+p <- p + annotate(
+  "text",
+  x = contig_offset + contig_width/2,
+  y = y_top,
+  label = "Prophage coordinates, bp",
+  angle = 90, vjust = 0, hjust = 0.5,
+  size = 3.2, fontface = "bold"
+)
+
+# Prophage genomic map — horizontal
+p <- p + annotate(
+  "text",
+  x = gene_offset + gene_width/2,
+  y = y_top,
+  label = "Prophage genomic map",
+  vjust = 0, hjust = 0.5,
+  size = 3.2, fontface = "bold"
+)
+
+# Prophage length, kb — rotated 90°
+p <- p + annotate(
+  "text",
+  x = len_offset + len_width/2,
+  y = y_top,
+  label = "Prophage length, kb",
+  angle = 90, vjust = 0, hjust = 0.5,
+  size = 3.2, fontface = "bold"
+)
+
+# Ensure the computed y_top is included in limits
+p <- p + expand_limits(y = y_top + 1)
+
+
 
 ## --- collapsed clade badges inside the FAMILY panel ---
 # anchor at the right edge of the tree (after collapse)
@@ -742,7 +826,7 @@ cat("First 10 rows with non-NA origin:\n")
 print(which(!is.na(origin_df[[1]]))[1:10])
 
 # ======================= 10) save =======================
-ggsave(out_png, p, width=18, height=14, dpi=300)
-ggsave(out_svg, p, width=18, height=14)
-ggsave(out_pdf, p, width=18, height=14)
+ggsave(out_png, p, width=18, height=16, dpi=300)
+ggsave(out_svg, p, width=18, height=16)
+ggsave(out_pdf, p, width=18, height=16)
 message(sprintf("Saved plots:\n  %s\n  %s", out_png, out_pdf))
