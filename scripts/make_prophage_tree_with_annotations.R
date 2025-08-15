@@ -475,14 +475,25 @@ gene_df <- genes_norm %>%
   filter(is_prophage %in% TRUE, is.finite(pl), pl > 0,
          is.finite(start), is.finite(end))
 
+# Global max prophage length (in bp)
+pl_max <- suppressWarnings(
+  max(tips_tbl_pruned$prophage_length[tips_tbl_pruned$is_prophage %in% TRUE], na.rm = TRUE)
+)
+if (!is.finite(pl_max) || pl_max <= 0) pl_max <- 1
+
 # Map gene coords to the gene panel and add colors
+row_half_gene <- 0.28
 row_half_gene <- 0.28
 gene_df <- gene_df %>%
   mutate(
+    # clamp gene coords to [1, pl] then scale against global max
     s = pmax(1, pmin(start, pl)),
     e = pmax(s, pmin(end,   pl)),
-    x0 = gene_offset + ((s - 1) / pl) * gene_width,
-    x1 = gene_offset + ( e      / pl) * gene_width,
+    
+    # map absolute bp to the common gene panel width (pl_max -> full width)
+    x0 = gene_offset + ((s - 1) / pl_max) * gene_width,
+    x1 = gene_offset + ( e       / pl_max) * gene_width,
+    
     ymin = y - row_half_gene,
     ymax = y + row_half_gene,
     fill_gene = ifelse(!is.na(yutin) & yutin != "", "#d62728", "grey30")
