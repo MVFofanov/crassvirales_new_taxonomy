@@ -164,6 +164,25 @@ collapsed_info <- tibble(node = collapse_nodes,
 message(sprintf("Will collapse %d clades (pure non-prophage); total collapsed tips across them = %d",
                 length(collapse_nodes), sum(collapsed_info$collapsed_n)))
 
+# ======================= 5b) fill families for non-prophage (incl. collapsed clades) =======================
+# Start from current family calls
+tips_tbl_filled <- tips_tbl_pruned %>%
+  mutate(family_all = family)
+
+# For each collapsed pure non-prophage clade, pick the majority (or sole) family among its descendant tips
+for (nd in collapse_nodes) {
+  desc <- ape::extract.clade(tr_pruned, nd)$tip.label
+  fams <- tips_tbl_pruned$family[match(desc, tips_tbl_pruned$label)]
+  fams_clean <- fams[!is.na(fams) & fams != "Unknown" & !(fams %in% NOT_CV_TAGS)]
+  if (length(fams_clean) > 0) {
+    fam_mode <- names(sort(table(fams_clean), decreasing = TRUE))[1]
+    # assign to all descendant tips for the "family_all" column
+    idx <- match(desc, tips_tbl_filled$label)
+    tips_tbl_filled$family_all[idx] <- factor(fam_mode, levels = levels(tips_tbl_pruned$family))
+  }
+}
+
+
 # ======================= 6) geometry for labels & panels =======================
 # preview (collapsed) to measure in data units
 p0 <- ggtree(tr_pruned, layout="rectangular") %<+% tips_tbl_pruned
@@ -251,10 +270,11 @@ p <- p +
   xlim_tree(max(p$data$x, na.rm=TRUE) + lab_offset + panel_shift + total_width_all + extra_right)
 
 # ======================= 8) side-table (prophages only; exact tip order) =======================
-side_df <- tips_tbl_pruned %>%
+# ======================= 8) side-table (use family_all for everyone) =======================
+side_df <- tips_tbl_filled %>%
   transmute(
     label,
-    `Crassvirales family` = ifelse(is_prophage, as.character(family),           NA_character_),
+    `Crassvirales family` = as.character(family_all),                         # <-- show for all tips
     `Genome origin`       = ifelse(is_prophage, origin,                         NA_character_),
     `Bacterial phylum`    = ifelse(is_prophage, as.character(bacterial_phylum), NA_character_),
     `Bacterial class`     = ifelse(is_prophage, as.character(bacterial_class),  NA_character_)
@@ -262,9 +282,6 @@ side_df <- tips_tbl_pruned %>%
   right_join(tibble(label = tr_pruned$tip.label), by = "label") %>%
   arrange(match(label, tr_pruned$tip.label)) %>%
   tibble::column_to_rownames("label")
-
-# diagnostics
-cat("Non-NA cells in panels:\n"); print(colSums(!is.na(side_df)))
 
 family_df <- side_df[, "Crassvirales family", drop = FALSE]
 origin_df <- side_df[, "Genome origin",       drop = FALSE]
