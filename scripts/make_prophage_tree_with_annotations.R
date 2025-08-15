@@ -252,8 +252,9 @@ total_width_all <- (panels_total_width +
 extra_right <- 0.10 * x_span
 
 # ======================= 7) base tree =======================
+# --- 7) base tree ---
 p <- ggtree(tr_pruned, layout="rectangular") %<+% tips_tbl_pruned +
-  theme_tree2() +
+  theme_tree() +                                # <— was theme_tree2(); removes the long x-axis
   geom_tippoint(aes(color = family), size = 1.2, alpha = 0.9) +
   ggtitle("TerL — Crassvirales clade (pruned), non-prophage clades collapsed",
           subtitle = "Triangles = collapsed clades; numbers = # tips inside")
@@ -261,6 +262,26 @@ p <- ggtree(tr_pruned, layout="rectangular") %<+% tips_tbl_pruned +
 for (nd in collapse_nodes) p <- collapse(p, node = nd)
 
 pd <- p$data
+
+# --- add a short tree scale bar (only over the tree area) ---
+## --- place treescale BELOW the tree --- 
+# (right after: pd <- p$data)
+tree_xmin <- min(pd$x, na.rm = TRUE)
+tree_xmax <- max(pd$x, na.rm = TRUE)
+tree_span <- tree_xmax - tree_xmin
+y_min_tip <- min(pd$y[pd$isTip], na.rm = TRUE)
+
+BOTTOM_PAD_TIPS <- 4          # <- how far below the lowest tip to place the scale (in "rows")
+y_bottom        <- y_min_tip - BOTTOM_PAD_TIPS
+
+p <- p + ggtree::geom_treescale(
+  x = tree_xmin + 0.02 * tree_span,
+  y = y_bottom + 0.8,         # slightly above the bottom limit so the text isn’t cut
+  width = 0.12 * tree_span,   # scale bar length; adjust to taste
+  linesize = 0.5,
+  fontsize = 3
+)
+
 lab_pos <- pd %>%
   dplyr::select(node, x, y) %>%
   dplyr::inner_join(collapsed_info, by="node")
