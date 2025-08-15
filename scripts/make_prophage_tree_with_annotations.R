@@ -62,9 +62,9 @@ itol_simplified_file <- file.path(dirname(itol_file), "TerL_iToL_simplified.txt"
 
 genes_file <- file.path(crassus_results_dir, "4_ORF/3_functional_annot_table_renamed.tsv")
 
-out_png <- file.path(proj_dir, "TerL_Crassvirales_pruned_collapsed.png")
-out_svg <- file.path(proj_dir, "TerL_Crassvirales_pruned_collapsed.svg")
-out_pdf <- file.path(proj_dir, "TerL_Crassvirales_pruned_collapsed.pdf")
+out_png <- file.path(proj_dir, "Crassphage_prophage_analysis_with_tree_plot.png")
+out_svg <- file.path(proj_dir, "Crassphage_prophage_analysis_with_tree_plot.svg")
+out_pdf <- file.path(proj_dir, "Crassphage_prophage_analysis_with_tree_plot.pdf")
 
 cat("Tree file: ", normalizePath(tree_file, winslash="/"), "\n")
 cat("Prophage annotation: ", normalizePath(ann_file, winslash="/"), "\n")
@@ -256,8 +256,7 @@ extra_right <- 0.10 * x_span
 p <- ggtree(tr_pruned, layout="rectangular") %<+% tips_tbl_pruned +
   theme_tree() +                                # <— was theme_tree2(); removes the long x-axis
   geom_tippoint(aes(color = family), size = 1.2, alpha = 0.9, show.legend = FALSE) +
-  ggtitle("TerL — Crassvirales clade (pruned), non-prophage clades collapsed",
-          subtitle = "Triangles = collapsed clades; numbers = # tips inside")
+  ggtitle("TerL — Crassvirales clade (pruned), non-prophage clades collapsed")
 
 for (nd in collapse_nodes) p <- collapse(p, node = nd)
 
@@ -596,19 +595,18 @@ row_half_gene <- 0.28
 row_half_gene <- 0.28
 gene_df <- gene_df %>%
   mutate(
-    # clamp gene coords to [1, pl] then scale against global max
+    # existing fields...
     s = pmax(1, pmin(start, pl)),
     e = pmax(s, pmin(end,   pl)),
-    
-    # map absolute bp to the common gene panel width (pl_max -> full width)
     x0 = gene_offset + ((s - 1) / pl_max) * gene_width,
     x1 = gene_offset + ( e       / pl_max) * gene_width,
-    
     ymin = y - row_half_gene,
     ymax = y + row_half_gene,
-    fill_gene = ifelse(!is.na(yutin) & yutin != "", "#d62728", "grey30")
+    # map to category labels for the legend
+    gene_type = ifelse(!is.na(yutin) & yutin != "", "Crassphage gene", "Hypothetical protein")
   ) %>%
   filter(is.finite(x0), is.finite(x1), x1 > x0)
+
 
 # Background strips for the full gene panel
 gene_row_bg_df <- pd_tips %>%
@@ -642,10 +640,9 @@ gene_polys <- gene_df %>%
       xs <- c(g$x0 + g$head, g$x1,  g$x1,       g$x0 + g$head, g$x0)
       ys <- c(g$ymin,        g$ymin, g$ymax,    g$ymax,        g$ymid)
     }
-    tibble(id = g$id, x = xs, y = ys, fill_gene = g$fill_gene)
+    tibble(id = g$id, x = xs, y = ys, gene_type = g$gene_type)
   }) %>%
   ungroup()
-
 
 
 # --- 9) draw panels — separate legends for each heatmap & keep tree legend ---
@@ -657,31 +654,62 @@ p <- gheatmap(
   width  = as.numeric(panel_widths["family"]),
   colnames = FALSE, font.size = 3, hjust = 0, color = NA
 )
+
 p <- p + scale_fill_manual(
   values = family_palette,
   breaks = names(family_palette),
   drop = FALSE, na.value = "#F2F2F2",
   name = "Crassvirales families",
-  guide = guide_legend(order = 2, ncol = 1, byrow = TRUE, title.position = "top")
+  guide = guide_legend(
+    order = 2, ncol = 1, byrow = TRUE, title.position = "top",
+    override.aes = list(alpha = 1)   # make legend swatches opaque
+  )
 )
 
-# --- collapsed clade badges drawn using the FAMILY fill scale ---
+# --- read FAMILY panel extents (must be before new_scale_fill) ---
 gb <- ggplot_build(p)
 tile_layers <- which(vapply(p$layers, function(L) inherits(L$geom, "GeomTile"), logical(1)))
-fam_built   <- gb$data[[tile_layers[1]]]          # first heatmap = family
-fam_left    <- min(fam_built$xmin, na.rm = TRUE)
-fam_right   <- max(fam_built$xmax, na.rm = TRUE)
+stopifnot(length(tile_layers) >= 1)
+fam_built <- gb$data[[tile_layers[1]]]
+fam_left  <- min(fam_built$xmin, na.rm = TRUE)
+fam_right <- max(fam_built$xmax, na.rm = TRUE)
 
+# --- collapsed clade overlay using the FAMILY fill scale (no legend) ---
 collapsed_rows_df <- lab_pos %>%
   dplyr::select(node, y) %>%
-  dplyr::inner_join(clade_fam_tbl, by = "node") %>%   # gives 'fam'
-  dplyr::mutate(x0 = fam_left, x1 = fam_right, ymin = y - 0.5, ymax = y + 0.5)
+  dplyr::inner_join(clade_fam_tbl, by = "node") %>%
+  dplyr::mutate(
+    fam  = factor(fam, levels = names(family_palette)),
+    x0   = fam_left, x1 = fam_right,
+    ymin = y - 0.5,  ymax = y + 0.5
+  )
 
 p <- p + geom_rect(
   data = collapsed_rows_df,
   aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax, fill = fam),
-  inherit.aes = FALSE, color = NA
+  inherit.aes = FALSE,
+  color = NA,
+  show.legend = FALSE
 )
+
+# --- seed ALL families into the FAMILY legend (still same fill scale) ---
+legend_seed <- data.frame(
+  fam = factor(names(family_palette), levels = names(family_palette)),
+  x   = fam_left - 1,        # anywhere off the panel is fine
+  y   = y_bottom - 1
+)
+
+p <- p + geom_point(
+  data = legend_seed,
+  aes(x = x, y = y, fill = fam),
+  inherit.aes = FALSE,
+  shape = 22, size = 3, alpha = 0,   # invisible on plot
+  show.legend = TRUE                  # but registers every level with the guide
+)
+
+# >>> Now you can start the next panel with a fresh fill scale <<<
+# p <- p + ggnewscale::new_scale_fill()
+
 
 # 9b) ORIGIN heatmap + its own legend
 p <- p + ggnewscale::new_scale_fill()
@@ -827,38 +855,38 @@ p <- p + expand_limits(y = y_top + 1)
 ## --- collapsed clade badges exactly matching FAMILY panel width ---
 
 # Build the plot to get the real tile extents (xmin/xmax)
-gb <- ggplot_build(p)
-
-# The first GeomTile layer is the FAMILY gheatmap (you added it first)
-tile_idx   <- which(vapply(p$layers, function(L) inherits(L$geom, "GeomTile"), logical(1)))[1]
-fam_built  <- gb$data[[tile_idx]]
-
-# Exact FAMILY panel span
-fam_left   <- min(fam_built$xmin, na.rm = TRUE)
-fam_right  <- max(fam_built$xmax, na.rm = TRUE)
-
-# (Optional) tiny inset if you don't want edge-to-edge
-pad_frac <- 0.00
-pad <- pad_frac * (fam_right - fam_left)
-
-collapsed_rows_df <- lab_pos %>%
-  dplyr::select(node, y) %>%
-  dplyr::inner_join(clade_fam_tbl, by = "node") %>%
-  dplyr::mutate(
-    fam_pref = paste0("FAM:", fam),
-    x0   = fam_left  + pad,
-    x1   = fam_right - pad,
-    ymin = y - 0.5,
-    ymax = y + 0.5
-  )
-
-# Draw badges on top of the FAMILY panel (same fill scale; do this BEFORE new_scale_fill)
-p <- p + geom_rect(
-  data = collapsed_rows_df,
-  aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax, fill = fam_pref),
-  inherit.aes = FALSE,
-  color = NA
-)
+# gb <- ggplot_build(p)
+# 
+# # The first GeomTile layer is the FAMILY gheatmap (you added it first)
+# tile_idx   <- which(vapply(p$layers, function(L) inherits(L$geom, "GeomTile"), logical(1)))[1]
+# fam_built  <- gb$data[[tile_idx]]
+# 
+# # Exact FAMILY panel span
+# fam_left   <- min(fam_built$xmin, na.rm = TRUE)
+# fam_right  <- max(fam_built$xmax, na.rm = TRUE)
+# 
+# # (Optional) tiny inset if you don't want edge-to-edge
+# pad_frac <- 0.00
+# pad <- pad_frac * (fam_right - fam_left)
+# 
+# collapsed_rows_df <- lab_pos %>%
+#   dplyr::select(node, y) %>%
+#   dplyr::inner_join(clade_fam_tbl, by = "node") %>%
+#   dplyr::mutate(
+#     fam_pref = paste0("FAM:", fam),
+#     x0   = fam_left  + pad,
+#     x1   = fam_right - pad,
+#     ymin = y - 0.5,
+#     ymax = y + 0.5
+#   )
+# 
+# # Draw badges on top of the FAMILY panel (same fill scale; do this BEFORE new_scale_fill)
+# p <- p + geom_rect(
+#   data = collapsed_rows_df,
+#   aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax, fill = fam_pref),
+#   inherit.aes = FALSE,
+#   color = NA
+# )
 
 # # Debug helpers:
 # p <- p + geom_vline(xintercept = fam_left,  linetype = 2) +
@@ -867,6 +895,10 @@ p <- p + geom_rect(
 
 # ======================= draw contig panel =======================
 # light background across the entire contig panel
+# --- PROPHAGE COORDINATES (with legend) ---
+p <- p + ggnewscale::new_scale_fill()   # fresh fill scale for this panel
+
+# light background across the entire contig panel (no legend)
 p <- p + geom_rect(
   data = contig_row_bg_df,
   aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax),
@@ -874,21 +906,30 @@ p <- p + geom_rect(
   fill = "#F2F2F2", color = NA
 )
 
-# gray contig bars (length ∝ bacterial_contig_length)
+# gray contig bars (legend label = "Bacterial contig")
 p <- p + geom_rect(
   data = contig_bar_df,
-  aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax),
+  aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax, fill = "Bacterial contig"),
   inherit.aes = FALSE,
-  fill = "grey60", color = NA
+  color = NA
 )
 
-# red prophage segment inside each contig bar
+# red prophage segment (legend label = "Prophage")
 p <- p + geom_rect(
   data = proph_rect_df,
-  aes(xmin = xr0, xmax = xr1, ymin = ymin, ymax = ymax),
+  aes(xmin = xr0, xmax = xr1, ymin = ymin, ymax = ymax, fill = "Prophage"),
   inherit.aes = FALSE,
-  fill = "#d62728", color = NA
+  color = NA
 )
+
+# legend for this panel
+p <- p + scale_fill_manual(
+  values = c("Prophage" = "#d62728", "Bacterial contig" = "grey60"),
+  breaks = c("Prophage", "Bacterial contig"),
+  name   = "Prophage coordinates",
+  guide  = guide_legend(order = 6, ncol = 1, byrow = TRUE, title.position = "top")
+)
+
 
 # ======================= draw length bars panel =======================
 # background for all tip rows in the length panel
@@ -924,23 +965,31 @@ p <- p + geom_text(
 # )
 
 # --- NOW add the gene map panel to the right ---
-# ggnewscale::new_scale_fill()  # start a fresh fill scale so we don't replace the heatmap scale
-p <- p + ggnewscale::new_scale_fill()   # <-- was just ggnewscale::new_scale_fill()
+# --- PROPHAGE GENOMIC MAP (with legend) ---
+p <- p + ggnewscale::new_scale_fill()   # fresh fill scale for this panel
 
-# background strip for the whole gene panel
+# background strip (no legend)
 p <- p + geom_rect(
   data = gene_row_bg_df,
   aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax),
   inherit.aes = FALSE, fill = "#F2F2F2", color = NA
 )
 
-# gene arrows as polygons (respect strand direction)
+# gene arrows with legend
 p <- p + geom_polygon(
   data = gene_polys,
-  aes(x = x, y = y, group = id, fill = fill_gene),
+  aes(x = x, y = y, group = id, fill = gene_type),
   inherit.aes = FALSE,
-  color = NA     # or color="white", size=0.1 for thin outlines
-) + scale_fill_identity(guide = "none")
+  color = NA
+)
+
+p <- p + scale_fill_manual(
+  values = c("Crassphage gene" = "#d62728", "Hypothetical protein" = "grey30"),
+  breaks = c("Crassphage gene", "Hypothetical protein"),
+  name   = "Prophage genomic map",
+  guide  = guide_legend(order = 7, ncol = 1, byrow = TRUE, title.position = "top")
+)
+
 
 
 
