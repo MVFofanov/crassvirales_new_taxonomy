@@ -584,28 +584,27 @@ p <- gheatmap(
 
 ## --- collapsed clade badges exactly over the FAMILY panel ---
 
-# find the first GeomTile layer = the FAMILY heatmap gheatmap() just added
-tile_layers <- which(vapply(p$layers, function(L) inherits(L$geom, "GeomTile"), logical(1)))
-stopifnot(length(tile_layers) >= 1)
-family_tiles <- p$layers[[ tile_layers[1] ]]$data
+## --- collapsed clade badges exactly matching FAMILY panel width ---
 
-# tile centers (x). cell width = median step between centers.
-xx   <- sort(unique(family_tiles$x))
-step <- if (length(xx) > 1) median(diff(xx)) else {
-  # fallback if all x equal (shouldn’t happen); compute from what you asked gheatmap to use
-  as.numeric(panel_widths["family"]) / ncol(family_df_pref)
-}
+# Build the plot to get the real tile extents (xmin/xmax)
+gb <- ggplot_build(p)
 
-fam_left  <- min(xx) - step/2
-fam_right <- max(xx) + step/2
+# The first GeomTile layer is the FAMILY gheatmap (you added it first)
+tile_idx   <- which(vapply(p$layers, function(L) inherits(L$geom, "GeomTile"), logical(1)))[1]
+fam_built  <- gb$data[[tile_idx]]
 
-# tiny optional padding (0 for full panel width)
-pad <- 0
+# Exact FAMILY panel span
+fam_left   <- min(fam_built$xmin, na.rm = TRUE)
+fam_right  <- max(fam_built$xmax, na.rm = TRUE)
+
+# (Optional) tiny inset if you don't want edge-to-edge
+pad_frac <- 0.00
+pad <- pad_frac * (fam_right - fam_left)
 
 collapsed_rows_df <- lab_pos %>%
   dplyr::select(node, y) %>%
-  inner_join(clade_fam_tbl, by = "node") %>%
-  mutate(
+  dplyr::inner_join(clade_fam_tbl, by = "node") %>%
+  dplyr::mutate(
     fam_pref = paste0("FAM:", fam),
     x0   = fam_left  + pad,
     x1   = fam_right - pad,
@@ -613,7 +612,7 @@ collapsed_rows_df <- lab_pos %>%
     ymax = y + 0.5
   )
 
-# draw badges using the SAME fill scale as the heatmaps (before new_scale_fill)
+# Draw badges on top of the FAMILY panel (same fill scale; do this BEFORE new_scale_fill)
 p <- p + geom_rect(
   data = collapsed_rows_df,
   aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax, fill = fam_pref),
@@ -621,7 +620,7 @@ p <- p + geom_rect(
   color = NA
 )
 
-# # debug: show the panel edges
+# # Debug helpers:
 # p <- p + geom_vline(xintercept = fam_left,  linetype = 2) +
 #          geom_vline(xintercept = fam_right, linetype = 2)
 
