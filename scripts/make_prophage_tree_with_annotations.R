@@ -41,7 +41,7 @@ phylum_color_map <- c(
 )
 
 class_color_map <- c(
-  "Bacilli"="#e6194B","Clostridia"="#f58231","Erysipelotrichia"="#911eb4",
+  "Bacilli"="#e6194B","Clostridia"="#f58231","Erysipelotrichia"="#808000",
   "Chitinophagia"="#f032e6","Cytophagia"="#000075","Ignavibacteria"="#fabed4",
   "Bdellovibrionia"="#bfef45","Mollicutes"="#911eb4","Vampirovibriophyceae"="#42d4f4",
   "Candidatus Borrarchaeota"="#000000","Candidatus Pacearchaeota"="#000000",
@@ -233,8 +233,8 @@ gene_width  <- 2  * x_span
 gene_offset <- contig_offset + contig_width + gene_gap
 
 # length bars panel, to the RIGHT of gene map
-bar_gap   <- 0.05 * x_span
-bar_width <- 0.2  * x_span
+bar_gap   <- 0.1 * x_span
+bar_width <- 0.6  * x_span
 len_offset <- gene_offset + gene_width + bar_gap
 len_width  <- bar_width
 
@@ -311,6 +311,116 @@ nice_kb_step <- function(max_kb) {
 
 `%||%` <- function(a,b) if (!is.finite(a) || length(a)==0) b else a
 
+# ===== axes (ticks) under panels, in kb =====
+
+# helper: pick a nice step
+# ---------- nicer tick helper (no crowded max; edge-aware labels) ----------
+nice_step <- function(max_units) {
+  steps <- c(0.1,0.2,0.5,1,2,5,10,20,50,100,200,500,1000)
+  steps[max(which(steps <= max_units/3))] %||% steps[1]
+}
+
+# Build ticks for a panel spanning [0, max_units] mapped to [offset, offset+width]
+# - drops the final "max" tick if it sits too close to the previous tick
+# - right-aligns the label if it is near the right edge
+panel_ticks <- function(offset, width, max_units, step = NULL,
+                        min_gap_frac = 0.45,   # drop MAX if gap < ~45% of step
+                        right_edge_frac = 0.03,# switch to hjust=1 if within 3% of right edge
+                        nudge_frac = 0.006) {  # nudge left when right-aligned
+  if (!is.finite(max_units) || max_units <= 0) max_units <- 1
+  if (is.null(step)) step <- nice_step(max_units)
+  
+  main <- seq(0, floor(max_units/step)*step, by = step)
+  gap  <- max_units - tail(main, 1)
+  # only add "max" tick if it's reasonably far from the last regular tick
+  if (gap >= min_gap_frac * step) {
+    br <- c(main, max_units)
+  } else {
+    br <- main
+  }
+  
+  fmt <- if (step >= 1) "%.0f" else "%.1f"
+  x   <- offset + (br / max_units) * width
+  
+  # edge-aware label placement
+  right_edge <- offset + width
+  hjust <- ifelse((right_edge - x) < right_edge_frac * width, 1, 0)
+  x_lab <- ifelse(hjust == 1, x - nudge_frac * width, x)
+  
+  tibble(units = br, x = x, x_lab = x_lab, hjust = hjust, lab = sprintf(fmt, br))
+}
+
+# ---------- build ticks (units!) ----------
+# contig axis now in Mb (you changed the title to "mb"); keep consistent:
+contig_max_mb <- contig_max / 1e6
+ticks_c <- panel_ticks(contig_offset, contig_width, contig_max_mb)
+
+# genomic map in kb
+pl_max_kb <- pl_max / 1e3
+ticks_g <- panel_ticks(gene_offset, gene_width, pl_max_kb)
+
+# length in kb (len_max is already kb)
+ticks_l <- panel_ticks(len_offset, len_width, len_max)
+
+# ---------- draw axes ----------
+tick_len   <- 0.25
+label_pad  <- 0.45
+axis_lwd   <- 0.4
+tick_lwd   <- 0.35
+label_size <- 3
+
+p <- p +
+  geom_segment(aes(x = contig_offset, xend = contig_offset + contig_width,
+                   y = y_contig_sc,  yend = y_contig_sc),
+               inherit.aes = FALSE, linewidth = axis_lwd) +
+  geom_segment(aes(x = gene_offset,   xend = gene_offset   + gene_width,
+                   y = y_gene_sc,     yend = y_gene_sc),
+               inherit.aes = FALSE, linewidth = axis_lwd)
+  # geom_segment(aes(x = len_offset,    xend = len_offset    + len_width,
+  #                  y = y_len_sc,      yend = y_len_sc),
+  #              inherit.aes = FALSE, linewidth = axis_lwd)
+
+# ticks + labels (CONTIG, Mb)
+p <- p +
+  geom_segment(data = ticks_c,
+               aes(x = x, xend = x, y = y_contig_sc - tick_len, yend = y_contig_sc + tick_len),
+               inherit.aes = FALSE, linewidth = tick_lwd) +
+  geom_text(data = ticks_c,
+            aes(x = x_lab, y = y_contig_sc - (tick_len + label_pad), label = lab, hjust = hjust),
+            inherit.aes = FALSE, vjust = 1, size = label_size)
+
+# ticks + labels (GENE MAP, kb)
+p <- p +
+  geom_segment(data = ticks_g,
+               aes(x = x, xend = x, y = y_gene_sc - tick_len, yend = y_gene_sc + tick_len),
+               inherit.aes = FALSE, linewidth = tick_lwd) +
+  geom_text(data = ticks_g,
+            aes(x = x_lab, y = y_gene_sc - (tick_len + label_pad), label = lab, hjust = hjust),
+            inherit.aes = FALSE, vjust = 1, size = label_size)
+
+# ticks + labels (LENGTH, kb)
+# p <- p +
+#   geom_segment(data = ticks_l,
+#                aes(x = x, xend = x, y = y_len_sc - tick_len, yend = y_len_sc + tick_len),
+#                inherit.aes = FALSE, linewidth = tick_lwd) +
+#   geom_text(data = ticks_l,
+#             aes(x = x_lab, y = y_len_sc - (tick_len + label_pad), label = lab, hjust = hjust),
+#             inherit.aes = FALSE, vjust = 1, size = label_size)
+
+
+# --- OPTIONAL: faint vertical gridlines inside each panel to aid comparison ---
+p <- p +
+  geom_segment(data = ticks_c,
+               aes(x = x, xend = x, y = ymin_rows, yend = ymax_rows),
+               inherit.aes = FALSE, alpha = GRID_ALPHA) +
+  geom_segment(data = ticks_g,
+               aes(x = x, xend = x, y = ymin_rows, yend = ymax_rows),
+               inherit.aes = FALSE, alpha = GRID_ALPHA)
+  # geom_segment(data = ticks_l,
+  #              aes(x = x, xend = x, y = ymin_rows, yend = ymax_rows),
+  #              inherit.aes = FALSE, alpha = GRID_ALPHA)
+
+
 # -------- y positions for scale bars below the tree --------
 y_min_tip <- min(pd$y[pd$isTip], na.rm = TRUE)
 row_gap   <- 0.9                      # vertical spacing between scale rows
@@ -330,45 +440,45 @@ y_bottom_all <- y_len_sc - 0.6        # bottom limit to include all scales
 #   linesize = 0.5, fontsize = 3
 # )
 
-# -------- 1) Scale under "Prophage coordinates" (in kb) --------
-contig_max_kb <- contig_max / 1000
-step_kb_c <- nice_kb_step(contig_max_kb)
-# convert 'step_kb_c' into plot units for the contig panel
-px_kb_c <- (step_kb_c*1000 / contig_max) * contig_width
-x0_c <- contig_offset + 0.05 * contig_width
-x1_c <- x0_c + px_kb_c
-p <- p + annotate("segment", x=x0_c, xend=x1_c, y=y_contig_sc, yend=y_contig_sc, linewidth=0.4)
-p <- p + annotate("segment", x=x0_c, xend=x0_c, y=y_contig_sc-0.25, yend=y_contig_sc+0.25, linewidth=0.4)
-p <- p + annotate("segment", x=x1_c, xend=x1_c, y=y_contig_sc-0.25, yend=y_contig_sc+0.25, linewidth=0.4)
-p <- p + annotate("text", x=(x0_c+x1_c)/2, y=y_contig_sc-0.45,
-                  label=paste0(step_kb_c, " kb"), vjust=1, size=3)
-
-# (Optional: make the column title match units)
-# Change your earlier title to "Prophage coordinates, kb"
-
-# -------- 2) Scale under "Prophage genomic map" (in kb, global pl_max) --------
-pl_max_kb <- pl_max / 1000
-step_kb_g <- nice_kb_step(pl_max_kb)
-px_kb_g <- (step_kb_g*1000 / pl_max) * gene_width
-x0_g <- gene_offset + 0.05 * gene_width
-x1_g <- x0_g + px_kb_g
-p <- p + annotate("segment", x=x0_g, xend=x1_g, y=y_gene_sc, yend=y_gene_sc, linewidth=0.4)
-p <- p + annotate("segment", x=x0_g, xend=x0_g, y=y_gene_sc-0.25, yend=y_gene_sc+0.25, linewidth=0.4)
-p <- p + annotate("segment", x=x1_g, xend=x1_g, y=y_gene_sc-0.25, yend=y_gene_sc+0.25, linewidth=0.4)
-p <- p + annotate("text", x=(x0_g+x1_g)/2, y=y_gene_sc-0.45,
-                  label=paste0(step_kb_g, " kb"), vjust=1, size=3)
-
-# -------- 3) Scale under "Prophage length" bars (already in kb) --------
-# len_max is in kb already (you computed bars_df$len_kb), so no /1000 here
-step_kb_l <- nice_kb_step(len_max)
-px_kb_l <- (step_kb_l / len_max) * len_width
-x0_l <- len_offset + 0.05 * len_width
-x1_l <- x0_l + px_kb_l
-p <- p + annotate("segment", x=x0_l, xend=x1_l, y=y_len_sc, yend=y_len_sc, linewidth=0.4)
-p <- p + annotate("segment", x=x0_l, xend=x0_l, y=y_len_sc-0.25, yend=y_len_sc+0.25, linewidth=0.4)
-p <- p + annotate("segment", x=x1_l, xend=x1_l, y=y_len_sc-0.25, yend=y_len_sc+0.25, linewidth=0.4)
-p <- p + annotate("text", x=(x0_l+x1_l)/2, y=y_len_sc-0.45,
-                  label=paste0(step_kb_l, " kb"), vjust=1, size=3)
+# # -------- 1) Scale under "Prophage coordinates" (in kb) --------
+# contig_max_kb <- contig_max / 1000
+# step_kb_c <- nice_kb_step(contig_max_kb)
+# # convert 'step_kb_c' into plot units for the contig panel
+# px_kb_c <- (step_kb_c*1000 / contig_max) * contig_width
+# x0_c <- contig_offset + 0.05 * contig_width
+# x1_c <- x0_c + px_kb_c
+# p <- p + annotate("segment", x=x0_c, xend=x1_c, y=y_contig_sc, yend=y_contig_sc, linewidth=0.4)
+# p <- p + annotate("segment", x=x0_c, xend=x0_c, y=y_contig_sc-0.25, yend=y_contig_sc+0.25, linewidth=0.4)
+# p <- p + annotate("segment", x=x1_c, xend=x1_c, y=y_contig_sc-0.25, yend=y_contig_sc+0.25, linewidth=0.4)
+# p <- p + annotate("text", x=(x0_c+x1_c)/2, y=y_contig_sc-0.45,
+#                   label=paste0(step_kb_c, " kb"), vjust=1, size=3)
+# 
+# # (Optional: make the column title match units)
+# # Change your earlier title to "Prophage coordinates, kb"
+# 
+# # -------- 2) Scale under "Prophage genomic map" (in kb, global pl_max) --------
+# pl_max_kb <- pl_max / 1000
+# step_kb_g <- nice_kb_step(pl_max_kb)
+# px_kb_g <- (step_kb_g*1000 / pl_max) * gene_width
+# x0_g <- gene_offset + 0.05 * gene_width
+# x1_g <- x0_g + px_kb_g
+# p <- p + annotate("segment", x=x0_g, xend=x1_g, y=y_gene_sc, yend=y_gene_sc, linewidth=0.4)
+# p <- p + annotate("segment", x=x0_g, xend=x0_g, y=y_gene_sc-0.25, yend=y_gene_sc+0.25, linewidth=0.4)
+# p <- p + annotate("segment", x=x1_g, xend=x1_g, y=y_gene_sc-0.25, yend=y_gene_sc+0.25, linewidth=0.4)
+# p <- p + annotate("text", x=(x0_g+x1_g)/2, y=y_gene_sc-0.45,
+#                   label=paste0(step_kb_g, " kb"), vjust=1, size=3)
+# 
+# # -------- 3) Scale under "Prophage length" bars (already in kb) --------
+# # len_max is in kb already (you computed bars_df$len_kb), so no /1000 here
+# step_kb_l <- nice_kb_step(len_max)
+# px_kb_l <- (step_kb_l / len_max) * len_width
+# x0_l <- len_offset + 0.05 * len_width
+# x1_l <- x0_l + px_kb_l
+# p <- p + annotate("segment", x=x0_l, xend=x1_l, y=y_len_sc, yend=y_len_sc, linewidth=0.4)
+# p <- p + annotate("segment", x=x0_l, xend=x0_l, y=y_len_sc-0.25, yend=y_len_sc+0.25, linewidth=0.4)
+# p <- p + annotate("segment", x=x1_l, xend=x1_l, y=y_len_sc-0.25, yend=y_len_sc+0.25, linewidth=0.4)
+# p <- p + annotate("text", x=(x0_l+x1_l)/2, y=y_len_sc-0.45,
+#                   label=paste0(step_kb_l, " kb"), vjust=1, size=3)
 
 
 # y-positions of collapsed triangles + their family
@@ -730,7 +840,7 @@ p <- p + annotate(
   "text",
   x = contig_offset + contig_width/2,
   y = y_top,
-  label = "Prophage coordinates, kb",
+  label = "Prophage coordinates, mb",
   angle = 90, vjust = 0, hjust = 0.5,
   size = 3.2, fontface = "bold"
 )
@@ -740,7 +850,7 @@ p <- p + annotate(
   "text",
   x = gene_offset + gene_width/2,
   y = y_top,
-  label = "Prophage genomic map",
+  label = "Prophage genomic map, kb",
   vjust = 0, hjust = 0.5,
   size = 3.2, fontface = "bold"
 )
