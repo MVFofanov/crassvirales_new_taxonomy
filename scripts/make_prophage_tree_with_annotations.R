@@ -203,7 +203,7 @@ for (nd in collapse_nodes) p0 <- collapse(p0, node=nd)
 x_span <- diff(range(p0$data$x, na.rm=TRUE))
 
 lab_offset  <- 0.03 * x_span   # distance between tips and labels
-panel_shift <- 1.5 * x_span   # push block of panels to the right of labels, 0.060 * x_span
+panel_shift <- 1.7 * x_span   # push block of panels to the right of labels, 0.060 * x_span
 panel_gap   <- 0.15 * x_span   # uniform gap between panels, 0.012 * x_span
 panel_w     <- 0.045 * x_span   # SAME width for all panels (change this one number), 0.045 * x_span 
 
@@ -229,7 +229,7 @@ contig_offset <- lab_offset + panel_shift + panels_total_width + contig_gap
 
 # gene map panel (per-ORF rectangles), to the RIGHT of contig
 gene_gap    <- 0.05 * x_span
-gene_width  <- 1  * x_span
+gene_width  <- 2  * x_span
 gene_offset <- contig_offset + contig_width + gene_gap
 
 # length bars panel, to the RIGHT of gene map
