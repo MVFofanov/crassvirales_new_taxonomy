@@ -582,28 +582,38 @@ p <- gheatmap(
 # left edge of the tree only (ignore heatmap layers)
 ## --- collapsed clade badges exactly over the FAMILY panel ---
 
-# use the full tree right edge (includes collapsed triangles)
-tree_right <- max(p$data$x, na.rm = TRUE)
+## --- collapsed clade badges exactly over the FAMILY panel ---
 
-# compute the exact family panel span used by gheatmap()
-fam_left   <- tree_right + as.numeric(panel_offsets["family"])
-fam_right  <- fam_left   + as.numeric(panel_widths["family"])
+# find the first GeomTile layer = the FAMILY heatmap gheatmap() just added
+tile_layers <- which(vapply(p$layers, function(L) inherits(L$geom, "GeomTile"), logical(1)))
+stopifnot(length(tile_layers) >= 1)
+family_tiles <- p$layers[[ tile_layers[1] ]]$data
 
-# optional tiny padding (set to 0 for edge-to-edge)
-pad <- 0 * x_span
+# tile centers (x). cell width = median step between centers.
+xx   <- sort(unique(family_tiles$x))
+step <- if (length(xx) > 1) median(diff(xx)) else {
+  # fallback if all x equal (shouldn’t happen); compute from what you asked gheatmap to use
+  as.numeric(panel_widths["family"]) / ncol(family_df_pref)
+}
+
+fam_left  <- min(xx) - step/2
+fam_right <- max(xx) + step/2
+
+# tiny optional padding (0 for full panel width)
+pad <- 0
 
 collapsed_rows_df <- lab_pos %>%
   dplyr::select(node, y) %>%
   inner_join(clade_fam_tbl, by = "node") %>%
   mutate(
     fam_pref = paste0("FAM:", fam),
-    x0 = fam_left  + pad,
-    x1 = fam_right - pad,
+    x0   = fam_left  + pad,
+    x1   = fam_right - pad,
     ymin = y - 0.5,
     ymax = y + 0.5
   )
 
-# draw on top of the family panel using the same fill scale
+# draw badges using the SAME fill scale as the heatmaps (before new_scale_fill)
 p <- p + geom_rect(
   data = collapsed_rows_df,
   aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax, fill = fam_pref),
@@ -611,7 +621,7 @@ p <- p + geom_rect(
   color = NA
 )
 
-# --- debug (optional): uncomment to verify alignment
+# # debug: show the panel edges
 # p <- p + geom_vline(xintercept = fam_left,  linetype = 2) +
 #          geom_vline(xintercept = fam_right, linetype = 2)
 
