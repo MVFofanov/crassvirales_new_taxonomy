@@ -303,6 +303,74 @@ p <- p +
                               override.aes = list(size = 3, alpha = 1), order = 1)) +
   xlim_tree(max(p$data$x, na.rm=TRUE) + lab_offset + panel_shift + total_width_all + extra_right)
 
+# -------- helper to choose a nice kb step --------
+nice_kb_step <- function(max_kb) {
+  steps <- c(0.1,0.2,0.5,1,2,5,10,20,50,100,200,500,1000)
+  steps[max(which(steps <= max_kb/3))] %||% steps[1]
+}
+
+`%||%` <- function(a,b) if (!is.finite(a) || length(a)==0) b else a
+
+# -------- y positions for scale bars below the tree --------
+y_min_tip <- min(pd$y[pd$isTip], na.rm = TRUE)
+row_gap   <- 0.9                      # vertical spacing between scale rows
+y_tree_sc <- y_min_tip - 0.6          # tree scale
+y_contig_sc <- y_tree_sc - row_gap    # under "Prophage coordinates"
+y_gene_sc   <- y_contig_sc - row_gap  # under "Prophage genomic map"
+y_len_sc    <- y_gene_sc   - row_gap  # under "Prophage length"
+y_bottom_all <- y_len_sc - 0.6        # bottom limit to include all scales
+
+# -------- TREE scale (you already add one; move it here to align rows) --------
+# tree_xmin <- min(pd$x, na.rm = TRUE); tree_xmax <- max(pd$x, na.rm = TRUE)
+# tree_span <- tree_xmax - tree_xmin
+# p <- p + ggtree::geom_treescale(
+#   x = tree_xmin + 0.02 * tree_span,
+#   y = y_tree_sc,
+#   width = 0.12 * tree_span,
+#   linesize = 0.5, fontsize = 3
+# )
+
+# -------- 1) Scale under "Prophage coordinates" (in kb) --------
+contig_max_kb <- contig_max / 1000
+step_kb_c <- nice_kb_step(contig_max_kb)
+# convert 'step_kb_c' into plot units for the contig panel
+px_kb_c <- (step_kb_c*1000 / contig_max) * contig_width
+x0_c <- contig_offset + 0.05 * contig_width
+x1_c <- x0_c + px_kb_c
+p <- p + annotate("segment", x=x0_c, xend=x1_c, y=y_contig_sc, yend=y_contig_sc, linewidth=0.4)
+p <- p + annotate("segment", x=x0_c, xend=x0_c, y=y_contig_sc-0.25, yend=y_contig_sc+0.25, linewidth=0.4)
+p <- p + annotate("segment", x=x1_c, xend=x1_c, y=y_contig_sc-0.25, yend=y_contig_sc+0.25, linewidth=0.4)
+p <- p + annotate("text", x=(x0_c+x1_c)/2, y=y_contig_sc-0.45,
+                  label=paste0(step_kb_c, " kb"), vjust=1, size=3)
+
+# (Optional: make the column title match units)
+# Change your earlier title to "Prophage coordinates, kb"
+
+# -------- 2) Scale under "Prophage genomic map" (in kb, global pl_max) --------
+pl_max_kb <- pl_max / 1000
+step_kb_g <- nice_kb_step(pl_max_kb)
+px_kb_g <- (step_kb_g*1000 / pl_max) * gene_width
+x0_g <- gene_offset + 0.05 * gene_width
+x1_g <- x0_g + px_kb_g
+p <- p + annotate("segment", x=x0_g, xend=x1_g, y=y_gene_sc, yend=y_gene_sc, linewidth=0.4)
+p <- p + annotate("segment", x=x0_g, xend=x0_g, y=y_gene_sc-0.25, yend=y_gene_sc+0.25, linewidth=0.4)
+p <- p + annotate("segment", x=x1_g, xend=x1_g, y=y_gene_sc-0.25, yend=y_gene_sc+0.25, linewidth=0.4)
+p <- p + annotate("text", x=(x0_g+x1_g)/2, y=y_gene_sc-0.45,
+                  label=paste0(step_kb_g, " kb"), vjust=1, size=3)
+
+# -------- 3) Scale under "Prophage length" bars (already in kb) --------
+# len_max is in kb already (you computed bars_df$len_kb), so no /1000 here
+step_kb_l <- nice_kb_step(len_max)
+px_kb_l <- (step_kb_l / len_max) * len_width
+x0_l <- len_offset + 0.05 * len_width
+x1_l <- x0_l + px_kb_l
+p <- p + annotate("segment", x=x0_l, xend=x1_l, y=y_len_sc, yend=y_len_sc, linewidth=0.4)
+p <- p + annotate("segment", x=x0_l, xend=x0_l, y=y_len_sc-0.25, yend=y_len_sc+0.25, linewidth=0.4)
+p <- p + annotate("segment", x=x1_l, xend=x1_l, y=y_len_sc-0.25, yend=y_len_sc+0.25, linewidth=0.4)
+p <- p + annotate("text", x=(x0_l+x1_l)/2, y=y_len_sc-0.45,
+                  label=paste0(step_kb_l, " kb"), vjust=1, size=3)
+
+
 # y-positions of collapsed triangles + their family
 # left_pad  <- 0.75 * as.numeric(panel_widths["family"])  # 25% of panel width
 # right_pad <- 0.5 * as.numeric(panel_widths["family"])  # keep full width, or try 0.05
@@ -636,9 +704,9 @@ TOP_MARGIN_MM  <- 10      # was 20 mm; try 6–10
 y_top <- y_max + TITLE_PAD_TIPS
 
 p <- p +
-  coord_cartesian(ylim = c(NA, y_top + 0.5), clip = "off") +  # set an explicit top limit
-  scale_y_continuous(expand = expansion(mult = c(0.02, TOP_EXPAND))) +
-  theme(plot.margin = margin(t = TOP_MARGIN_MM, r = 6, b = 6, l = 6, unit = "mm"))
+  coord_cartesian(ylim = c(y_bottom_all, y_top + 0.5), clip = "off") +
+  scale_y_continuous(expand = expansion(mult = c(0, TOP_EXPAND))) +
+  theme(plot.margin = margin(t = TOP_MARGIN_MM, r = 6, b = 8, l = 6, unit = "mm"))
 
 # (IMPORTANT) Remove this line from your code (it double-adds space):
 # p <- p + expand_limits(y = y_top + 1)
@@ -662,7 +730,7 @@ p <- p + annotate(
   "text",
   x = contig_offset + contig_width/2,
   y = y_top,
-  label = "Prophage coordinates, bp",
+  label = "Prophage coordinates, kb",
   angle = 90, vjust = 0, hjust = 0.5,
   size = 3.2, fontface = "bold"
 )
