@@ -353,90 +353,6 @@ panel_ticks_normal <- function(offset, width, max_units, step = NULL) {
   tibble(units = br, x = x, lab = sprintf(fmt, br))
 }
 
-
-# ---------- build ticks (units!) ----------
-# contig axis now in Mb (you changed the title to "mb"); keep consistent:
-# contig axis in Mb
-# ---------- build ticks from pretty() (units!) ----------
-# contig axis in Mb (use br_c / axis_max_mb computed above)
-# ---------- build ticks from pretty() (units!) ----------
-# step_mb <- if (length(br_c) >= 2) diff(br_c)[1] else axis_max_mb
-# fmt_mb  <- if (is.finite(step_mb) && step_mb >= 1) "%.0f" else "%.1f"
-# ticks_c <- tibble(
-#   units = br_c,
-#   x     = contig_offset + (br_c / axis_max_mb) * contig_width,
-#   lab   = sprintf(fmt_mb, br_c)
-# )
-# 
-# step_kb <- if (length(br_g) >= 2) diff(br_g)[1] else axis_max_kb
-# fmt_kb  <- if (is.finite(step_kb) && step_kb >= 1) "%.0f" else "%.1f"
-# ticks_g <- tibble(
-#   units = br_g,
-#   x     = gene_offset + (br_g / axis_max_kb) * gene_width,
-#   lab   = sprintf(fmt_kb, br_g)
-# )
-
-
-
-# length in kb (if you decide to draw it)
-# ticks_l <- panel_ticks_normal(len_offset, len_width, len_max)
-
-# ---------- draw axes ----------
-# tick_len   <- 0.25
-# label_pad  <- 0.45
-# axis_lwd   <- 0.4
-# tick_lwd   <- 0.35
-# label_size <- 3
-# 
-# p <- p +
-#   geom_segment(aes(x = contig_offset, xend = contig_offset + contig_width,
-#                    y = y_contig_sc,  yend = y_contig_sc),
-#                inherit.aes = FALSE, linewidth = axis_lwd) +
-#   geom_segment(aes(x = gene_offset,   xend = gene_offset   + gene_width,
-#                    y = y_gene_sc,     yend = y_gene_sc),
-#                inherit.aes = FALSE, linewidth = axis_lwd)
-  # geom_segment(aes(x = len_offset,    xend = len_offset    + len_width,
-  #                  y = y_len_sc,      yend = y_len_sc),
-  #              inherit.aes = FALSE, linewidth = axis_lwd)
-
-# ticks + labels (CONTIG, Mb)
-# p <- p +
-#   geom_segment(data = ticks_c,
-#                aes(x = x, xend = x, y = y_contig_sc - tick_len, yend = y_contig_sc + tick_len),
-#                inherit.aes = FALSE, linewidth = tick_lwd) +
-#   geom_text(data = ticks_c,
-#             aes(x = x, y = y_contig_sc - (tick_len + label_pad), label = lab),
-#             inherit.aes = FALSE, vjust = 1, size = label_size)
-
-# ticks + labels (GENE MAP, kb)
-# p <- p +
-#   geom_segment(data = ticks_g,
-#                aes(x = x, xend = x, y = y_gene_sc - tick_len, yend = y_gene_sc + tick_len),
-#                inherit.aes = FALSE, linewidth = tick_lwd) +
-#   geom_text(data = ticks_g,
-#             aes(x = x, y = y_gene_sc - (tick_len + label_pad), label = lab),
-#             inherit.aes = FALSE, vjust = 1, size = label_size)
-# 
-# 
-# # --- OPTIONAL: faint vertical gridlines inside each panel to aid comparison ---
-# p <- p +
-#   geom_segment(data = ticks_c,
-#                aes(x = x, xend = x, y = ymin_rows, yend = ymax_rows),
-#                inherit.aes = FALSE, alpha = GRID_ALPHA) +
-#   geom_segment(data = ticks_g,
-#                aes(x = x, xend = x, y = ymin_rows, yend = ymax_rows),
-#                inherit.aes = FALSE, alpha = GRID_ALPHA)
-
-# -------- y positions for scale bars below the tree --------
-# y_min_tip <- min(pd$y[pd$isTip], na.rm = TRUE)
-# row_gap   <- 0.9                      # vertical spacing between scale rows
-# y_tree_sc <- y_min_tip - 0.6          # tree scale
-# y_contig_sc <- y_tree_sc - row_gap    # under "Prophage coordinates"
-# y_gene_sc   <- y_contig_sc - row_gap  # under "Prophage genomic map"
-# y_len_sc    <- y_gene_sc   - row_gap  # under "Prophage length"
-# y_bottom_all <- y_len_sc - 0.6        # bottom limit to include all scales
-
-# 
 # ======================= 8) side-table (use family_all for everyone) =======================
 side_df <- tips_tbl_filled %>%
   transmute(
@@ -954,47 +870,6 @@ p <- p + annotate(
 # Ensure the computed y_top is included in limits
 p <- p + expand_limits(y = y_top + 1)
 
-## --- collapsed clade badges exactly matching FAMILY panel width ---
-
-# Build the plot to get the real tile extents (xmin/xmax)
-# gb <- ggplot_build(p)
-# 
-# # The first GeomTile layer is the FAMILY gheatmap (you added it first)
-# tile_idx   <- which(vapply(p$layers, function(L) inherits(L$geom, "GeomTile"), logical(1)))[1]
-# fam_built  <- gb$data[[tile_idx]]
-# 
-# # Exact FAMILY panel span
-# fam_left   <- min(fam_built$xmin, na.rm = TRUE)
-# fam_right  <- max(fam_built$xmax, na.rm = TRUE)
-# 
-# # (Optional) tiny inset if you don't want edge-to-edge
-# pad_frac <- 0.00
-# pad <- pad_frac * (fam_right - fam_left)
-# 
-# collapsed_rows_df <- lab_pos %>%
-#   dplyr::select(node, y) %>%
-#   dplyr::inner_join(clade_fam_tbl, by = "node") %>%
-#   dplyr::mutate(
-#     fam_pref = paste0("FAM:", fam),
-#     x0   = fam_left  + pad,
-#     x1   = fam_right - pad,
-#     ymin = y - 0.5,
-#     ymax = y + 0.5
-#   )
-# 
-# # Draw badges on top of the FAMILY panel (same fill scale; do this BEFORE new_scale_fill)
-# p <- p + geom_rect(
-#   data = collapsed_rows_df,
-#   aes(xmin = x0, xmax = x1, ymin = ymin, ymax = ymax, fill = fam_pref),
-#   inherit.aes = FALSE,
-#   color = NA
-# )
-
-# # Debug helpers:
-# p <- p + geom_vline(xintercept = fam_left,  linetype = 2) +
-#          geom_vline(xintercept = fam_right, linetype = 2)
-
-
 # ======================= draw contig panel =======================
 # light background across the entire contig panel
 # --- PROPHAGE COORDINATES (with legend) ---
@@ -1058,14 +933,6 @@ p <- p + geom_text(
   size = 2.6
 )
 
-# # a single fill scale that knows about all prefixed values
-# p <- p + scale_fill_manual(
-#   values = panel_palette,
-#   na.value = "#F2F2F2",
-#   drop = FALSE,
-#   name = "Side panels"
-# )
-
 # --- NOW add the gene map panel to the right ---
 # --- PROPHAGE GENOMIC MAP (with legend) ---
 p <- p + ggnewscale::new_scale_fill()   # fresh fill scale for this panel
@@ -1091,9 +958,6 @@ p <- p + scale_fill_manual(
   name   = "Prophage genomic map",
   guide  = guide_legend(order = 7, ncol = 1, byrow = TRUE, title.position = "top")
 )
-
-
-
 
 cat("First 10 rows with non-NA origin:\n")
 print(which(!is.na(origin_df[[1]]))[1:10])
