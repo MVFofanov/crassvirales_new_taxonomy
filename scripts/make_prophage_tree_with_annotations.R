@@ -262,6 +262,14 @@ for (nd in collapse_nodes) p <- collapse(p, node = nd)
 
 pd <- p$data
 
+y_min_tip <- min(pd$y[pd$isTip], na.rm = TRUE)
+row_gap   <- 0.9                      # vertical spacing between scale rows
+y_tree_sc <- y_min_tip - 0.6          # tree scale
+y_contig_sc <- y_tree_sc - row_gap    # under "Prophage coordinates"
+y_gene_sc   <- y_contig_sc - row_gap  # under "Prophage genomic map"
+y_len_sc    <- y_gene_sc   - row_gap  # under "Prophage length"
+y_bottom_all <- y_len_sc - 0.6        # bottom limit to include all scales
+
 # --- add a short tree scale bar (only over the tree area) ---
 ## --- place treescale BELOW the tree --- 
 # (right after: pd <- p$data)
@@ -310,112 +318,125 @@ nice_kb_step <- function(max_kb) {
 
 `%||%` <- function(a,b) if (!is.finite(a) || length(a)==0) b else a
 
-# ===== axes (ticks) under panels, in kb =====
+# Build a robust pretty axis in data units
+pretty_axis <- function(max_units, n = 6) {
+  if (!is.finite(max_units) || max_units <= 0) max_units <- 1
+  br <- pretty(c(0, max_units), n = n)
+  br <- br[br >= 0]                 # keep non-negative
+  ax_max <- suppressWarnings(max(br, na.rm = TRUE))
+  if (!is.finite(ax_max) || ax_max <= 0) {  # fallback if pretty() misbehaves
+    ax_max <- max(max_units, 1)
+    br <- seq(0, ax_max, length.out = n)
+  }
+  list(breaks = unique(br), max = ax_max)
+}
 
-# helper: pick a nice step
-# ---------- nicer tick helper (no crowded max; edge-aware labels) ----------
+
+# ===== axes (ticks) under panels, in Mb/kb (normal, no left nudge) =====
+
 nice_step <- function(max_units) {
   steps <- c(0.1,0.2,0.5,1,2,5,10,20,50,100,200,500,1000)
   steps[max(which(steps <= max_units/3))] %||% steps[1]
 }
 
-# Build ticks for a panel spanning [0, max_units] mapped to [offset, offset+width]
-# - drops the final "max" tick if it sits too close to the previous tick
-# - right-aligns the label if it is near the right edge
-panel_ticks <- function(offset, width, max_units, step = NULL,
-                        min_gap_frac = 0.45,   # drop MAX if gap < ~45% of step
-                        right_edge_frac = 0.03,# switch to hjust=1 if within 3% of right edge
-                        nudge_frac = 0.006) {  # nudge left when right-aligned
+panel_ticks_normal <- function(offset, width, max_units, step = NULL) {
   if (!is.finite(max_units) || max_units <= 0) max_units <- 1
   if (is.null(step)) step <- nice_step(max_units)
   
-  main <- seq(0, floor(max_units/step)*step, by = step)
-  gap  <- max_units - tail(main, 1)
-  # only add "max" tick if it's reasonably far from the last regular tick
-  if (gap >= min_gap_frac * step) {
-    br <- c(main, max_units)
-  } else {
-    br <- main
-  }
+  br <- seq(0, max_units, by = step)
+  # ensure the rightmost tick is exactly at max_units
+  if (abs(tail(br, 1) - max_units) > 1e-9) br <- c(br, max_units)
   
   fmt <- if (step >= 1) "%.0f" else "%.1f"
   x   <- offset + (br / max_units) * width
   
-  # edge-aware label placement
-  right_edge <- offset + width
-  hjust <- ifelse((right_edge - x) < right_edge_frac * width, 1, 0)
-  x_lab <- ifelse(hjust == 1, x - nudge_frac * width, x)
-  
-  tibble(units = br, x = x, x_lab = x_lab, hjust = hjust, lab = sprintf(fmt, br))
+  tibble(units = br, x = x, lab = sprintf(fmt, br))
 }
+
 
 # ---------- build ticks (units!) ----------
 # contig axis now in Mb (you changed the title to "mb"); keep consistent:
-contig_max_mb <- contig_max / 1e6
-ticks_c <- panel_ticks(contig_offset, contig_width, contig_max_mb)
+# contig axis in Mb
+# ---------- build ticks from pretty() (units!) ----------
+# contig axis in Mb (use br_c / axis_max_mb computed above)
+# ---------- build ticks from pretty() (units!) ----------
+# step_mb <- if (length(br_c) >= 2) diff(br_c)[1] else axis_max_mb
+# fmt_mb  <- if (is.finite(step_mb) && step_mb >= 1) "%.0f" else "%.1f"
+# ticks_c <- tibble(
+#   units = br_c,
+#   x     = contig_offset + (br_c / axis_max_mb) * contig_width,
+#   lab   = sprintf(fmt_mb, br_c)
+# )
+# 
+# step_kb <- if (length(br_g) >= 2) diff(br_g)[1] else axis_max_kb
+# fmt_kb  <- if (is.finite(step_kb) && step_kb >= 1) "%.0f" else "%.1f"
+# ticks_g <- tibble(
+#   units = br_g,
+#   x     = gene_offset + (br_g / axis_max_kb) * gene_width,
+#   lab   = sprintf(fmt_kb, br_g)
+# )
 
-# genomic map in kb
-pl_max_kb <- pl_max / 1e3
-ticks_g <- panel_ticks(gene_offset, gene_width, pl_max_kb)
 
-# length in kb (len_max is already kb)
-ticks_l <- panel_ticks(len_offset, len_width, len_max)
+
+# length in kb (if you decide to draw it)
+# ticks_l <- panel_ticks_normal(len_offset, len_width, len_max)
 
 # ---------- draw axes ----------
-tick_len   <- 0.25
-label_pad  <- 0.45
-axis_lwd   <- 0.4
-tick_lwd   <- 0.35
-label_size <- 3
-
-p <- p +
-  geom_segment(aes(x = contig_offset, xend = contig_offset + contig_width,
-                   y = y_contig_sc,  yend = y_contig_sc),
-               inherit.aes = FALSE, linewidth = axis_lwd) +
-  geom_segment(aes(x = gene_offset,   xend = gene_offset   + gene_width,
-                   y = y_gene_sc,     yend = y_gene_sc),
-               inherit.aes = FALSE, linewidth = axis_lwd)
+# tick_len   <- 0.25
+# label_pad  <- 0.45
+# axis_lwd   <- 0.4
+# tick_lwd   <- 0.35
+# label_size <- 3
+# 
+# p <- p +
+#   geom_segment(aes(x = contig_offset, xend = contig_offset + contig_width,
+#                    y = y_contig_sc,  yend = y_contig_sc),
+#                inherit.aes = FALSE, linewidth = axis_lwd) +
+#   geom_segment(aes(x = gene_offset,   xend = gene_offset   + gene_width,
+#                    y = y_gene_sc,     yend = y_gene_sc),
+#                inherit.aes = FALSE, linewidth = axis_lwd)
   # geom_segment(aes(x = len_offset,    xend = len_offset    + len_width,
   #                  y = y_len_sc,      yend = y_len_sc),
   #              inherit.aes = FALSE, linewidth = axis_lwd)
 
 # ticks + labels (CONTIG, Mb)
-p <- p +
-  geom_segment(data = ticks_c,
-               aes(x = x, xend = x, y = y_contig_sc - tick_len, yend = y_contig_sc + tick_len),
-               inherit.aes = FALSE, linewidth = tick_lwd) +
-  geom_text(data = ticks_c,
-            aes(x = x_lab, y = y_contig_sc - (tick_len + label_pad), label = lab, hjust = hjust),
-            inherit.aes = FALSE, vjust = 1, size = label_size)
+# p <- p +
+#   geom_segment(data = ticks_c,
+#                aes(x = x, xend = x, y = y_contig_sc - tick_len, yend = y_contig_sc + tick_len),
+#                inherit.aes = FALSE, linewidth = tick_lwd) +
+#   geom_text(data = ticks_c,
+#             aes(x = x, y = y_contig_sc - (tick_len + label_pad), label = lab),
+#             inherit.aes = FALSE, vjust = 1, size = label_size)
 
 # ticks + labels (GENE MAP, kb)
-p <- p +
-  geom_segment(data = ticks_g,
-               aes(x = x, xend = x, y = y_gene_sc - tick_len, yend = y_gene_sc + tick_len),
-               inherit.aes = FALSE, linewidth = tick_lwd) +
-  geom_text(data = ticks_g,
-            aes(x = x_lab, y = y_gene_sc - (tick_len + label_pad), label = lab, hjust = hjust),
-            inherit.aes = FALSE, vjust = 1, size = label_size)
-
-# --- OPTIONAL: faint vertical gridlines inside each panel to aid comparison ---
-p <- p +
-  geom_segment(data = ticks_c,
-               aes(x = x, xend = x, y = ymin_rows, yend = ymax_rows),
-               inherit.aes = FALSE, alpha = GRID_ALPHA) +
-  geom_segment(data = ticks_g,
-               aes(x = x, xend = x, y = ymin_rows, yend = ymax_rows),
-               inherit.aes = FALSE, alpha = GRID_ALPHA)
+# p <- p +
+#   geom_segment(data = ticks_g,
+#                aes(x = x, xend = x, y = y_gene_sc - tick_len, yend = y_gene_sc + tick_len),
+#                inherit.aes = FALSE, linewidth = tick_lwd) +
+#   geom_text(data = ticks_g,
+#             aes(x = x, y = y_gene_sc - (tick_len + label_pad), label = lab),
+#             inherit.aes = FALSE, vjust = 1, size = label_size)
+# 
+# 
+# # --- OPTIONAL: faint vertical gridlines inside each panel to aid comparison ---
+# p <- p +
+#   geom_segment(data = ticks_c,
+#                aes(x = x, xend = x, y = ymin_rows, yend = ymax_rows),
+#                inherit.aes = FALSE, alpha = GRID_ALPHA) +
+#   geom_segment(data = ticks_g,
+#                aes(x = x, xend = x, y = ymin_rows, yend = ymax_rows),
+#                inherit.aes = FALSE, alpha = GRID_ALPHA)
 
 # -------- y positions for scale bars below the tree --------
-y_min_tip <- min(pd$y[pd$isTip], na.rm = TRUE)
-row_gap   <- 0.9                      # vertical spacing between scale rows
-y_tree_sc <- y_min_tip - 0.6          # tree scale
-y_contig_sc <- y_tree_sc - row_gap    # under "Prophage coordinates"
-y_gene_sc   <- y_contig_sc - row_gap  # under "Prophage genomic map"
-y_len_sc    <- y_gene_sc   - row_gap  # under "Prophage length"
-y_bottom_all <- y_len_sc - 0.6        # bottom limit to include all scales
+# y_min_tip <- min(pd$y[pd$isTip], na.rm = TRUE)
+# row_gap   <- 0.9                      # vertical spacing between scale rows
+# y_tree_sc <- y_min_tip - 0.6          # tree scale
+# y_contig_sc <- y_tree_sc - row_gap    # under "Prophage coordinates"
+# y_gene_sc   <- y_contig_sc - row_gap  # under "Prophage genomic map"
+# y_len_sc    <- y_gene_sc   - row_gap  # under "Prophage length"
+# y_bottom_all <- y_len_sc - 0.6        # bottom limit to include all scales
 
-
+# 
 # ======================= 8) side-table (use family_all for everyone) =======================
 side_df <- tips_tbl_filled %>%
   transmute(
@@ -466,6 +487,12 @@ contig_df <- pd_tips %>%
 contig_max <- suppressWarnings(max(contig_df$contig_len[contig_df$is_prophage %in% TRUE], na.rm = TRUE))
 if (!is.finite(contig_max) || contig_max <= 0) contig_max <- 1
 
+# --- Approach A: pretty axis for contig panel (Mb) ---
+contig_max_mb <- contig_max / 1e6
+br_c <- pretty(c(0, contig_max_mb))             # tick positions in Mb (nice numbers)
+axis_max_mb <- max(br_c)                        # rounded, nice max (>= data max)
+axis_max_bp <- axis_max_mb * 1e6                # same max in bp for bar scaling
+
 row_half <- 0.45  # visual thickness of per-tip bars
 
 # Background strip for every row across full contig panel width (light gray)
@@ -481,7 +508,7 @@ contig_row_bg_df <- pd_tips %>%
 contig_bar_df <- contig_df %>%
   dplyr::filter(is_prophage %in% TRUE, is.finite(contig_len), contig_len > 0) %>%
   dplyr::mutate(
-    bar_len = (contig_len / contig_max) * contig_width,
+    bar_len = (contig_len / axis_max_bp) * contig_width,
     x0      = contig_offset,
     x1      = contig_offset + bar_len,
     ymin    = y - row_half,
@@ -590,16 +617,22 @@ pl_max <- suppressWarnings(
 )
 if (!is.finite(pl_max) || pl_max <= 0) pl_max <- 1
 
+# --- Approach A: pretty axis for gene map (kb) ---
+pl_max_kb <- pl_max / 1e3
+br_g <- pretty(c(0, pl_max_kb))          # tick positions in kb
+axis_max_kb <- max(br_g)                 # rounded, nice max
+pl_axis_max_bp <- axis_max_kb * 1e3      # same max in bp for mapping x0/x1
+
 # Map gene coords to the gene panel and add colors
-row_half_gene <- 0.28
 row_half_gene <- 0.28
 gene_df <- gene_df %>%
   mutate(
     # existing fields...
     s = pmax(1, pmin(start, pl)),
     e = pmax(s, pmin(end,   pl)),
-    x0 = gene_offset + ((s - 1) / pl_max) * gene_width,
-    x1 = gene_offset + ( e       / pl_max) * gene_width,
+    # AFTER  (scale by pretty axis max)
+    x0 = gene_offset + ((s - 1) / pl_axis_max_bp) * gene_width,
+    x1 = gene_offset + ( e       / pl_axis_max_bp) * gene_width,
     ymin = y - row_half_gene,
     ymax = y + row_half_gene,
     # map to category labels for the legend
@@ -643,6 +676,75 @@ gene_polys <- gene_df %>%
     tibble(id = g$id, x = xs, y = ys, gene_type = g$gene_type)
   }) %>%
   ungroup()
+
+# === Build ticks (now that br_c/br_g exist) and draw axes ===
+
+# ticks (CONTIG, Mb)
+step_mb <- if (length(br_c) >= 2) diff(br_c)[1] else axis_max_mb
+fmt_mb  <- if (is.finite(step_mb) && step_mb >= 1) "%.0f" else "%.1f"
+ticks_c <- tibble(
+  units = br_c,
+  x     = contig_offset + (br_c / axis_max_mb) * contig_width,
+  lab   = sprintf(fmt_mb, br_c)
+)
+
+# ticks (GENE MAP, kb)
+step_kb <- if (length(br_g) >= 2) diff(br_g)[1] else axis_max_kb
+fmt_kb  <- if (is.finite(step_kb) && step_kb >= 1) "%.0f" else "%.1f"
+ticks_g <- tibble(
+  units = br_g,
+  x     = gene_offset + (br_g / axis_max_kb) * gene_width,
+  lab   = sprintf(fmt_kb, br_g)
+)
+
+# guards used by gridlines
+GRID_ALPHA <- if (exists("GRID_ALPHA")) GRID_ALPHA else 0.12
+ymin_rows  <- min(pd_tips$y, na.rm = TRUE) - 0.5
+ymax_rows  <- max(pd_tips$y, na.rm = TRUE) + 0.5
+
+# styling
+tick_len   <- 0.25
+label_pad  <- 0.45
+axis_lwd   <- 0.4
+tick_lwd   <- 0.35
+label_size <- 3
+
+# baseline axes
+p <- p +
+  geom_segment(aes(x = contig_offset, xend = contig_offset + contig_width,
+                   y = y_contig_sc,  yend = y_contig_sc),
+               inherit.aes = FALSE, linewidth = axis_lwd) +
+  geom_segment(aes(x = gene_offset,   xend = gene_offset   + gene_width,
+                   y = y_gene_sc,     yend = y_gene_sc),
+               inherit.aes = FALSE, linewidth = axis_lwd)
+
+# ticks + labels (CONTIG, Mb)
+p <- p +
+  geom_segment(data = ticks_c,
+               aes(x = x, xend = x, y = y_contig_sc - tick_len, yend = y_contig_sc + tick_len),
+               inherit.aes = FALSE, linewidth = tick_lwd) +
+  geom_text(data = ticks_c,
+            aes(x = x, y = y_contig_sc - (tick_len + label_pad), label = lab),
+            inherit.aes = FALSE, vjust = 1, size = label_size)
+
+# ticks + labels (GENE MAP, kb)
+p <- p +
+  geom_segment(data = ticks_g,
+               aes(x = x, xend = x, y = y_gene_sc - tick_len, yend = y_gene_sc + tick_len),
+               inherit.aes = FALSE, linewidth = tick_lwd) +
+  geom_text(data = ticks_g,
+            aes(x = x, y = y_gene_sc - (tick_len + label_pad), label = lab),
+            inherit.aes = FALSE, vjust = 1, size = label_size)
+
+# OPTIONAL vertical gridlines
+p <- p +
+  geom_segment(data = ticks_c,
+               aes(x = x, xend = x, y = ymin_rows, yend = ymax_rows),
+               inherit.aes = FALSE, alpha = GRID_ALPHA) +
+  geom_segment(data = ticks_g,
+               aes(x = x, xend = x, y = ymin_rows, yend = ymax_rows),
+               inherit.aes = FALSE, alpha = GRID_ALPHA)
+
 
 
 # --- 9) draw panels — separate legends for each heatmap & keep tree legend ---
