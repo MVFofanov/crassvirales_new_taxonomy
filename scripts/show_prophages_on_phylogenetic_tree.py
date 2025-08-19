@@ -445,7 +445,7 @@ def build_class_maps_for_contigs(
         # Bacillota
         "Bacilli": "#e6194B",
         "Clostridia": "#f58231",
-        "Erysipelotrichia": "#911eb4",
+        "Erysipelotrichia": "#808000",
         # Bacteroidota
         "Chitinophagia": "#f032e6",
         "Cytophagia": "#000075",
@@ -1605,7 +1605,8 @@ def export_itol_simplified_table(itol_path: Path, out_path: Optional[Path] = Non
 
 def main():
     wd = "/mnt/c/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/blast_prophages_vs_ncbi_and_gtdb"
-    crassus_output = "/mnt/c/crassvirales/CrassUS_old/CrassUS/results/prophage_analysis"
+    # crassus_output = "/mnt/c/crassvirales/CrassUS_old/CrassUS/results/prophage_analysis"
+    crassus_output = "/mnt/c/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/prophages_ncbi_prophage-db_malte"
     crassus_phylogeny = f"{crassus_output}/5_phylogenies/3_iToL"
     tree_file = Path(f"{crassus_phylogeny}/TerL_iToL_renamed.nwk")
     itol_annotation = Path(f"{crassus_phylogeny}/TerL_iToL.txt")
