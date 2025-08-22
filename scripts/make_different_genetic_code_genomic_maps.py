@@ -65,6 +65,16 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Where to save output figures (default: <base>/4_ORF/0_all_codings_renamed/genetic_code_maps)",
     )
+
+    p.add_argument(
+        "--prodigal_gv_gff_dir",
+        type=Path,
+        default=None,
+        help="Directory with prodigal-gv GFFs; filenames use '&' instead of '|' (e.g., NZ_...&provirus_... .gff). "
+            "If provided, a fourth (bottom) track will be drawn from this GFF and titled with "
+            "Prodigal version; run_type; transl_table from the header."
+    )
+
     p.add_argument("--dpi", type=int, default=300, help="DPI for PNG outputs")
     p.add_argument("--svg", action="store_true", help="Also save SVG next to each PNG")
     return p.parse_args()
@@ -198,9 +208,93 @@ def annotate_best_track_features(features: List[GraphicFeature], yidx: Dict[tupl
             f.label = str(label)
             f.color = "red"
 
+def prodigal_gv_gff_path_for(genome_id: str, gv_dir: Path) -> Path:
+    """
+    Prodigal-gv filenames use '&' instead of '|' in the genome_id.
+    Example: 'NZ_FOJF01000001.1|provirus_…' -> 'NZ_FOJF01000001.1&provirus_….gff'
+    """
+    return gv_dir / f"{genome_id.replace('|', '&')}.gff"
+
+
+def _parse_model_data_title_from_gv(text: str) -> str:
+    """
+    From a header line like:
+      # Model Data: version=Prodigal.v2.11.0-gv;run_type=Metagenomic;model="29|Methyl...|0";...;transl_table=11;...
+    build the subtitle:
+      'Prodigal.v2.11.0-gv; Metagenomic; transl_table=11; model=29|Methyl...|0'
+    If nothing is found, return 'prodigal-gv'.
+    """
+    version = run_type = transl_table = model = None
+    for line in text.splitlines():
+        if line.startswith("# Model Data:"):
+            parts = line.split(":", 1)[1] if ":" in line else ""
+            for kv in parts.split(";"):
+                kv = kv.strip()
+                if not kv or "=" not in kv:
+                    continue
+                k, v = kv.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip('"')  # unquote values like model="...|...|..."
+                if k == "version":
+                    version = v
+                elif k == "run_type":
+                    run_type = v
+                elif k == "transl_table":
+                    transl_table = v
+                elif k == "model":
+                    model = v
+            break
+
+    if not (version or run_type or transl_table or model):
+        return "prodigal-gv"
+
+    pieces = []
+    if version:
+        pieces.append(version)
+    if run_type:
+        pieces.append(run_type)
+    if transl_table:
+        pieces.append(f"transl_table={transl_table}")
+    if model:
+        pieces.append(f"model={model}")
+
+    return "; ".join(pieces)
+
+
+def read_prodigal_gv_features_and_title(gv_gff_path: Path) -> Tuple[List[GraphicFeature], str]:
+    """
+    Read a prodigal-gv GFF: return (features, subtitle).
+    Features are neutral (DEFAULT_COLOR) and unlabeled (no labels).
+    """
+    feats: List[GraphicFeature] = []
+    if not gv_gff_path or not gv_gff_path.exists():
+        return feats, "prodigal-gv"
+
+    text = gv_gff_path.read_text()
+    subtitle = _parse_model_data_title_from_gv(text)
+
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 9:
+            continue
+        seqid, source, ftype, start, end, score, strand, phase, attrs = parts
+        if ftype != "CDS":
+            continue
+        try:
+            s = int(start); e = int(end)
+        except ValueError:
+            continue
+        st = 1 if strand == "+" else -1
+        feats.append(GraphicFeature(start=s, end=e, strand=st, color=DEFAULT_COLOR, label=None))
+
+    return feats, subtitle
+
 
 def plot_genome(genome_id: str, gff_dir: Path, out_dir: Path, base: Path,
                 func_df: Optional[pd.DataFrame] = None,
+                prodigal_gv_dir: Optional[Path] = None,
                 dpi: int = 300, save_svg: bool = False) -> Tuple[Path, Optional[Path]]:
     # Detect best code from 4_ORF/1_best_coding_renamed
     best_code = detect_best_code(genome_id, base)
@@ -220,29 +314,50 @@ def plot_genome(genome_id: str, gff_dir: Path, out_dir: Path, base: Path,
         yidx = yutin_index_for_genome(func_df, genome_id)
         annotate_best_track_features(code_to_feats[best_code], yidx)
 
+    # Optional prodigal-gv track (bottom)
+    gv_feats: List[GraphicFeature] = []
+    gv_subtitle = None
+    if prodigal_gv_dir:
+        gv_path = prodigal_gv_gff_path_for(genome_id, prodigal_gv_dir)
+        gv_feats, gv_subtitle = read_prodigal_gv_features_and_title(gv_path)
+        if gv_feats:
+            max_end = max(max_end, max(f.end for f in gv_feats))
+
     seq_len = max(1000, max_end + 100)  # minimal baseline if empty
 
     # Build records per code
     records = {code: GraphicRecord(sequence_length=seq_len, features=feats)
                for code, feats in code_to_feats.items()}
 
-    # Figure layout: one row per code
+    # Build prodigal-gv record if present
+    gv_record = GraphicRecord(sequence_length=seq_len, features=gv_feats) if gv_feats else None
+
+    # Figure layout: one row per code (+1 if gv)
+    n_rows = len(CODES) + (1 if gv_record else 0)
     height_per_row = 2.0
-    fig_h = max(2.5, height_per_row * len(CODES))
-    fig, axes = plt.subplots(len(CODES), 1, figsize=(14, fig_h))
-    if len(CODES) == 1:
+    fig_h = max(2.5, height_per_row * n_rows)
+    fig, axes = plt.subplots(n_rows, 1, figsize=(14, fig_h))
+    if n_rows == 1:
         axes = [axes]
 
     # Suptitle with genome id (include best code if known)
     sup = genome_id if best_code is None else f"{genome_id}   (CrassUS best code: {CODE_TITLES.get(best_code, best_code)})"
     fig.suptitle(sup, fontsize=12, y=0.995)
 
-    for ax, code in zip(axes, CODES):
-        records[code].plot(ax=ax)
+    # Plot the three code rows
+    row_idx = 0
+    for code in CODES:
+        records[code].plot(ax=axes[row_idx])
         title = f"Genetic code: {CODE_TITLES.get(code, code)}"
         if best_code is not None and code == best_code:
             title += " — CrassUS BEST"
-        ax.set_title(title, loc="left", fontsize=10)
+        axes[row_idx].set_title(title, loc="left", fontsize=10)
+        row_idx += 1
+
+    # Plot prodigal-gv at the bottom (if any)
+    if gv_record:
+        gv_record.plot(ax=axes[row_idx])
+        axes[row_idx].set_title(f"Prodigal-gv: {gv_subtitle}", loc="left", fontsize=10)
 
     plt.tight_layout(rect=[0, 0, 1, 0.97])
 
@@ -275,7 +390,12 @@ def main() -> None:
     func_df = load_functional_annotations(base)
 
     for g in genomes:
-        png, svg = plot_genome(g, gff_dir, out_dir, base=base, func_df=func_df, dpi=args.dpi, save_svg=args.svg)
+        png, svg = plot_genome(
+            g, gff_dir, out_dir, base=base,
+            func_df=func_df,
+            prodigal_gv_dir=args.prodigal_gv_gff_dir,  # pass the new arg
+            dpi=args.dpi, save_svg=args.svg
+        )
         if svg is None:
             print(f"✅ Saved: {png}")
         else:
