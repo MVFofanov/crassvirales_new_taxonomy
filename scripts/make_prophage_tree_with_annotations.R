@@ -40,31 +40,45 @@ phylum_color_map <- c(
   "Methanobacteriota"="#000000","Unknown"=DEFAULT_COLOR
 )
 
+# class_color_map <- c(
+#   "Bacilli"="#e6194B","Clostridia"="#f58231","Erysipelotrichia"="#808000",
+#   "Chitinophagia"="#f032e6","Cytophagia"="#000075","Ignavibacteria"="#fabed4",
+#   "Bdellovibrionia"="#bfef45","Mollicutes"="#911eb4","Vampirovibriophyceae"="#42d4f4",
+#   "Candidatus Borrarchaeota"="#000000","Candidatus Pacearchaeota"="#000000",
+#   "Halobacteria"="#000000","Methanobacteria"="#000000",
+#   "Unknown"="#999999"
+# )
+
 class_color_map <- c(
-  "Bacilli"="#e6194B","Clostridia"="#f58231","Erysipelotrichia"="#808000",
-  "Chitinophagia"="#f032e6","Cytophagia"="#000075","Ignavibacteria"="#fabed4",
-  "Bdellovibrionia"="#bfef45","Mollicutes"="#911eb4","Vampirovibriophyceae"="#42d4f4",
-  "Candidatus Borrarchaeota"="#000000","Candidatus Pacearchaeota"="#000000",
-  "Halobacteria"="#000000","Methanobacteria"="#000000",
-  "Unknown"="#999999"
+  "Flavobacteriia"  = "#f58231",
+  "Chitinophagia"   = "#f032e6",
+  "Cytophagia"      = "#000075",
+  "Saprospiria"     = "#42d4f4",
+  "Bacteroidia"     = "#999999",
+  "Unknown"         = "#999999"
 )
 
 NOT_CV_TAGS <- c("outgroup","NA")
 
 # ======================= paths =======================
-proj_dir  <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/blast_prophages_vs_ncbi_and_gtdb"
-crassus_results_dir <- "C:/crassvirales/CrassUS_old/CrassUS/results/prophage_analysis"
+proj_dir  <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/integrated_prophages"
+# crassus_results_dir_prophage_db <- "C:/crassvirales/CrassUS_old/CrassUS/results/prophage_analysis"
+# crassus_results_dir_malte <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/prophages_ncbi_prophage-db_malte"
+crassus_results_dir_crassvirales_prophages <- "C:/crassvirales/CrassUS_old/CrassUS/results/crassvirales_prophages"
 
-tree_file <- file.path(crassus_results_dir, "5_phylogenies/3_iToL/Terl_iToL_renamed.nwk")
-ann_file  <- file.path(proj_dir, "Crassphage_prophage_analysis_annotation.tsv")
-itol_file <- file.path(crassus_results_dir, "5_phylogenies/3_iToL/TerL_iToL_simplified.txt")
+tree_file <- file.path(crassus_results_dir_crassvirales_prophages, "5_phylogenies/3_iToL/Terl_iToL_renamed.nwk")
+ann_file  <- file.path(proj_dir, "Crassphage_prophage_analysis_annotation_ncbi.tsv")
+itol_file <- file.path(crassus_results_dir_crassvirales_prophages, "5_phylogenies/3_iToL/TerL_iToL_simplified.txt")
 itol_simplified_file <- file.path(dirname(itol_file), "TerL_iToL_simplified.txt")
 
-genes_file <- file.path(crassus_results_dir, "4_ORF/3_functional_annot_table_renamed.tsv")
+genes_file <- file.path(crassus_results_dir_crassvirales_prophages, "4_ORF/3_functional_annot_table_renamed.tsv")
 
-out_png <- file.path(proj_dir, "Crassphage_prophage_analysis_with_tree_plot.png")
-out_svg <- file.path(proj_dir, "Crassphage_prophage_analysis_with_tree_plot.svg")
-out_pdf <- file.path(proj_dir, "Crassphage_prophage_analysis_with_tree_plot.pdf")
+out_dir <- file.path(proj_dir, "figures")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+out_png <- file.path(out_dir, "Crassphage_prophage_analysis_with_tree_plot_ncbi.png")
+out_svg <- file.path(out_dir, "Crassphage_prophage_analysis_with_tree_plot_ncbi.svg")
+out_pdf <- file.path(out_dir, "Crassphage_prophage_analysis_with_tree_plot_ncbi.pdf")
 
 cat("Tree file: ", normalizePath(tree_file, winslash="/"), "\n")
 cat("Prophage annotation: ", normalizePath(ann_file, winslash="/"), "\n")
@@ -128,11 +142,19 @@ tips_tbl <- tibble(label = tr$tip.label) %>%
   left_join(itol, by="label") %>%
   left_join(ann,  by="label") %>%
   mutate(
-    is_prophage     = !is.na(prophage_family),
+    # reference tips are exactly those present in the iTOL simplified table
+    is_reference   = !is.na(itol_family),
+    
+    # prophage tips are those that have a prophage annotation row
+    is_prophage    = !is.na(prophage_family),
+    
+    # family used for coloring/filters (prophage call overrides iTOL call)
     family          = dplyr::coalesce(prophage_family, itol_family),
     family          = ifelse(family %in% names(family_palette), family, "Unknown"),
+    
     in_crassvirales = !is.na(family) & !(family %in% NOT_CV_TAGS) & family != "Unknown"
   )
+
 cat("Matched prophage rows: ", sum(tips_tbl$is_prophage, na.rm=TRUE), " of ", nrow(tips_tbl), "\n", sep="")
 
 # ======================= 4) prune to MRCA of Crassvirales =======================
@@ -150,51 +172,34 @@ tips_tbl_pruned <- tips_tbl %>%
   mutate(family = factor(family, levels = names(family_palette)))
 
 # ======================= 5) choose non-prophage nodes to collapse =======================
+# ======================= 5) choose reference-only nodes to collapse =======================
 internal_nodes <- (Ntip(tr_pruned) + 1):(Ntip(tr_pruned) + tr_pruned$Nnode)
-desc_tip_count <- desc_prophage_count <- integer(length(internal_nodes))
+
+desc_tip_count <- integer(length(internal_nodes))
+desc_ref_count <- integer(length(internal_nodes))
+
 for (i in seq_along(internal_nodes)) {
   nd <- internal_nodes[i]
   tips_under <- ape::extract.clade(tr_pruned, nd)$tip.label
-  desc_tip_count[i]      <- length(tips_under)
-  desc_prophage_count[i] <- sum(tips_tbl_pruned$is_prophage[match(tips_under, tips_tbl_pruned$label)], na.rm=TRUE)
-}
-collapse_nodes <- internal_nodes[desc_tip_count > 1 & desc_prophage_count == 0]
-collapsed_info <- tibble(node = collapse_nodes,
-                         collapsed_n = desc_tip_count[match(collapse_nodes, internal_nodes)])
-message(sprintf("Will collapse %d clades (pure non-prophage); total collapsed tips across them = %d",
-                length(collapse_nodes), sum(collapsed_info$collapsed_n)))
-
-# ======================= 5b) fill families for non-prophage (incl. collapsed clades) =======================
-# Start from current family calls
-tips_tbl_filled <- tips_tbl_pruned %>%
-  mutate(family_all = family)
-
-# For each collapsed pure non-prophage clade, pick the majority (or sole) family among its descendant tips
-for (nd in collapse_nodes) {
-  desc <- ape::extract.clade(tr_pruned, nd)$tip.label
-  fams <- tips_tbl_pruned$family[match(desc, tips_tbl_pruned$label)]
-  fams_clean <- fams[!is.na(fams) & fams != "Unknown" & !(fams %in% NOT_CV_TAGS)]
-  if (length(fams_clean) > 0) {
-    fam_mode <- names(sort(table(fams_clean), decreasing = TRUE))[1]
-    # assign to all descendant tips for the "family_all" column
-    idx <- match(desc, tips_tbl_filled$label)
-    tips_tbl_filled$family_all[idx] <- factor(fam_mode, levels = levels(tips_tbl_pruned$family))
-  }
+  idx <- match(tips_under, tips_tbl_pruned$label)
+  
+  desc_tip_count[i] <- length(tips_under)
+  # count how many descendants are reference tips from iTOL
+  desc_ref_count[i] <- sum(tips_tbl_pruned$is_reference[idx] %in% TRUE, na.rm = TRUE)
 }
 
-# Family call per collapsed clade (mode among descendants)
-clade_fam_tbl <- lapply(collapse_nodes, function(nd) {
-  desc <- ape::extract.clade(tr_pruned, nd)$tip.label
-  fams <- tips_tbl_pruned$family[match(desc, tips_tbl_pruned$label)]
-  fams_clean <- fams[!is.na(fams) & fams != "Unknown" & !(fams %in% NOT_CV_TAGS)]
-  fam_mode <- if (length(fams_clean) > 0) {
-    as.character(names(sort(table(fams_clean), decreasing = TRUE))[1])
-  } else {
-    "Unknown"
-  }
-  tibble(node = nd, fam = fam_mode)
-}) %>% bind_rows()
+# collapse only clades with >1 tip and ALL tips are reference
+collapse_nodes <- internal_nodes[desc_tip_count > 1 & desc_ref_count == desc_tip_count]
 
+collapsed_info <- tibble(
+  node = collapse_nodes,
+  collapsed_n = desc_tip_count[match(collapse_nodes, internal_nodes)]
+)
+
+message(sprintf(
+  "Will collapse %d clades (reference-only); total collapsed tips across them = %d",
+  length(collapse_nodes), sum(collapsed_info$collapsed_n)
+))
 
 # ======================= 6) geometry for labels & panels =======================
 # preview (collapsed) to measure in data units
@@ -963,7 +968,9 @@ cat("First 10 rows with non-NA origin:\n")
 print(which(!is.na(origin_df[[1]]))[1:10])
 
 # ======================= 10) save =======================
-ggsave(out_png, p, width=18, height=16, dpi=300)
-ggsave(out_svg, p, width=18, height=16)
-ggsave(out_pdf, p, width=18, height=16)
+width <- 16
+height <- 18
+ggsave(out_png, p, width=width, height=height, dpi=300)
+ggsave(out_svg, p, width=width, height=height)
+ggsave(out_pdf, p, width=width, height=height)
 message(sprintf("Saved plots:\n  %s\n  %s", out_png, out_pdf))
