@@ -56,6 +56,7 @@ tree_files <- c(
 # ---- User options ----
 # SHOW_TIP_LABELS <- TRUE   # set to FALSE to hide tip labels
 SHOW_CRASS_LABELS <- FALSE
+SHOW_PROPHAGE_LABELS  <- TRUE   # <- NEW FLAG
 ROOT_AT_OUTGROUP <- TRUE
 ROOT_AT_CRASS_MRCA <- FALSE   # root at MRCA of all Crassvirales tips
 
@@ -287,7 +288,8 @@ for (tree_file in tree_files) {
     left_join(bact_annot, by = "label") %>%
     mutate(
       is_crassvirales = genome_id != "unknown" & !(genome_id %in% outgroup_genomes),
-      is_prophage     = !is.na(bact_domain) & bact_domain == "Bacteria"
+      is_prophage     = !is.na(bact_domain) & bact_domain == "Bacteria",
+      bact_genomad_length_num = suppressWarnings(as.numeric(bact_genomad_length))
     )
   
   # =========================
@@ -453,6 +455,33 @@ for (tree_file in tree_files) {
   for (nd in collapse_nodes) {
     p_circ <- collapse(p_circ, node = nd)
   }
+  
+  # ---- Label only prophage tips with size > 50 kb ----
+  # ---- Optional prophage labels (>50 kb) ----
+  if (SHOW_PROPHAGE_LABELS) {
+    
+    tip_label_df <- p_circ$data %>%
+      dplyr::filter(
+        isTip,
+        is_prophage,
+        !is.na(bact_genomad_length_num),
+        bact_genomad_length_num > 50000
+      )
+    
+    if (nrow(tip_label_df) > 0) {
+      p_circ <- p_circ +
+        geom_tiplab(
+          data = tip_label_df,
+          aes(label = label),
+          size = 1.3,
+          offset = 0.02,
+          align = FALSE,
+          linetype = "dotted",
+          linewidth = 0.2
+        )
+    }
+  }
+  
   
   # ---- Clade highlights (behind branches) ----
   # ---- Highlight clades (family-colored) ----
