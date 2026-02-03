@@ -2,6 +2,7 @@ suppressPackageStartupMessages({
   library(tidyverse)
   library(gggenomes)
   library(cowplot)
+  library(svglite)
 })
 
 # ------------------ SETTINGS ------------------
@@ -14,6 +15,7 @@ PAIRS_TSV <- file.path(WD, "pairs_prophage_with_flanks_vs_bacterial.tsv")
 PROPHAGE_TSV <- file.path(WD, "Crassphage_prophage_analysis_annotation_ncbi_with_samples_and_countries_crassvirales_clade_flanks.tsv")
 
 OUT_PNG <- file.path(WD, "prophage_vs_bacterial_2x8.png")
+OUT_SVG <- file.path(WD, "prophage_vs_bacterial_2x8.svg")
 OUT_PDF <- file.path(WD, "prophage_vs_bacterial_2x8.pdf")
 
 DEBUG_ONE <- file.path(WD, "debug_one_panel.png")
@@ -234,6 +236,19 @@ calc_prophage_box_for_prophage_fragment <- function(prophage_fragment_id, proph_
   )
 }
 
+calc_crop_from_links <- function(links_pb, pad = 2000) {
+  # links_pb has columns: start2/end2 on bacterial, start/end on prophage
+  if (is.null(links_pb) || nrow(links_pb) == 0) return(NULL)
+  
+  lo <- min(pmin(links_pb$start2, links_pb$end2), na.rm = TRUE)
+  hi <- max(pmax(links_pb$start2, links_pb$end2), na.rm = TRUE)
+  
+  tibble(
+    crop_start = max(1L, as.integer(lo - pad)),
+    crop_end   = as.integer(hi + pad)
+  )
+}
+
 
 make_pair_plot <- function(prophage_id, bacterial_id,
                            phold_df, blast_df, proph_tbl,
@@ -242,65 +257,97 @@ make_pair_plot <- function(prophage_id, bacterial_id,
                            min_pid = 0,
                            show_self_links = FALSE,
                            color_links_by_pid = TRUE,
-                           func_colors = FUNC_COLORS) {
+                           func_colors = FUNC_COLORS,
+                           crop_pad = 10000) {
   
   ids <- c(prophage_id, bacterial_id)
   
+  # --- links FIRST (these define what you actually plot) ---
+  links_pb <- make_links_schema(blast_df, prophage_id, bacterial_id, min_align_len, min_pid)
+  
+  # --- crop window from plotted links (bacterial coords are start2/end2) ---
+  crop_win <- calc_crop_from_links(links_pb, pad = crop_pad)
+  
   # --- genes (PHOLD) ---
-  genes <- phold_df %>%
+  genes_raw <- phold_df %>%
     filter(contig_id %in% ids) %>%
     filter(!is.na(gene_min), !is.na(gene_max)) %>%
     transmute(
-      seq_id  = as.character(contig_id),
-      start   = as.integer(gene_min),
-      end     = as.integer(gene_max),
-      strand  = as.character(strand),   # "+" / "-"
-      type    = "CDS",                  # IMPORTANT for geom_gene()
-      func    = func
+      seq_id = as.character(contig_id),
+      gene_min = as.integer(gene_min),
+      gene_max = as.integer(gene_max),
+      strand = as.character(strand),
+      func = func
     )
   
-  if (nrow(genes) == 0) stop("No genes for pair: ", prophage_id, " vs ", bacterial_id)
+  if (nrow(genes_raw) == 0) stop("No genes for pair: ", prophage_id, " vs ", bacterial_id)
   
-  # --- seqs from genes ---
-  seqs <- genes %>%
-    group_by(seq_id) %>%
-    summarize(length = max(end, na.rm = TRUE), .groups = "drop") %>%
+  # --- crop/shift bacterial genes to crop window ---
+  genes <- genes_raw %>%
+    mutate(is_bacterial = seq_id == bacterial_id) %>%
+    {
+      if (!is.null(crop_win)) {
+        filter(., !is_bacterial | (gene_max >= crop_win$crop_start & gene_min <= crop_win$crop_end))
+      } else .
+    } %>%
     mutate(
-      length = as.integer(pmax(length, 1L)),
-      bin_id = factor(seq_id, levels = c(prophage_id, bacterial_id))
+      start = if_else(is_bacterial & !is.null(crop_win),
+                      gene_min - crop_win$crop_start + 1L,
+                      gene_min),
+      end   = if_else(is_bacterial & !is.null(crop_win),
+                      gene_max - crop_win$crop_start + 1L,
+                      gene_max)
     ) %>%
-    arrange(bin_id)
+    transmute(
+      seq_id,
+      start = as.integer(start),
+      end   = as.integer(end),
+      strand,
+      type = "CDS",
+      func
+    )
   
-  # --- prophage boxes (relative coordinates within fragment) ---
-  # box_df <- calc_prophage_boxes_for_ids(ids, proph_tbl)
+  if (nrow(genes) == 0) stop("All genes removed by crop for pair: ", prophage_id, " vs ", bacterial_id)
   
-  # gggenomes tracks are y=1..n in the order of seqs
-  # if (nrow(box_df) > 0) {
-  #   box_df <- box_df %>%
-  #     mutate(
-  #       y = match(seq_id, seqs$seq_id),
-  #       ymin = y - 0.45,
-  #       ymax = y + 0.45,
-  #       xmin = pmin(rel_start, rel_end),
-  #       xmax = pmax(rel_start, rel_end)
-  #     )
-  # }
+  # --- shift bacterial link coordinates to the cropped system ---
+  if (!is.null(crop_win) && nrow(links_pb) > 0) {
+    links_pb <- links_pb %>%
+      mutate(
+        start2 = as.integer(start2 - crop_win$crop_start + 1L),
+        end2   = as.integer(end2   - crop_win$crop_start + 1L)
+      )
+  }
   
-  # --- links ---
-  links_pb <- make_links_schema(blast_df, prophage_id, bacterial_id, min_align_len, min_pid)
+  # self links unchanged (unless you also want to crop them; usually not needed)
   links_self <- make_self_links_schema(blast_df, ids, min_align_len, min_pid)
   links <- if (show_self_links) bind_rows(links_pb, links_self) else links_pb
   
   if (is.null(title_txt)) title_txt <- prophage_id
   
+  # --- seqs: enforce bacterial length to crop window length ---
+  seqs <- genes %>%
+    group_by(seq_id) %>%
+    summarize(length = max(end, na.rm = TRUE), .groups = "drop") %>%
+    mutate(length = as.integer(pmax(length, 1L)))
+  
+  if (!is.null(crop_win)) {
+    crop_len <- as.integer(crop_win$crop_end - crop_win$crop_start + 1L)
+    seqs <- seqs %>%
+      mutate(length = if_else(seq_id == bacterial_id, crop_len, length))
+  }
+  
+  seqs <- seqs %>%
+    mutate(bin_id = factor(seq_id, levels = c(prophage_id, bacterial_id))) %>%
+    arrange(bin_id)
+  
+  # --- plot ---
   p <- gggenomes(seqs = seqs, genes = genes, links = links) +
     geom_seq(linewidth = SEQ_LINEWIDTH)
   
+  # prophage box on prophage fragment (unchanged)
   box_df <- calc_prophage_box_for_prophage_fragment(prophage_id, proph_tbl)
-  
   if (nrow(box_df) > 0) {
     y_df <- p %>% pull_seqs() %>% distinct(seq_id, y)
-    
     box_df <- box_df %>%
       left_join(y_df, by = "seq_id") %>%
       mutate(ymin = y - 0.45, ymax = y + 0.45)
@@ -315,8 +362,7 @@ make_pair_plot <- function(prophage_id, bacterial_id,
       )
   }
   
-  
-  # links (geom_link is a filled polygon; use fill mapping)
+  # links
   if (nrow(links) > 0) {
     if (color_links_by_pid) {
       p <- p +
@@ -327,12 +373,12 @@ make_pair_plot <- function(prophage_id, bacterial_id,
     }
   }
   
-  # genes: make them visible (separate strands + bigger size)
+  # genes
   p <- p +
     geom_gene(aes(fill = func),
-              position = "strand",   # THIS is the big visibility fix
-              size = 2.2,            # increase if still too thin (try 3–4)
-              stroke = GENE_OUTLINE, # outline thickness
+              position = "strand",
+              size = 2.2,
+              stroke = GENE_OUTLINE,
               colour = "black") +
     scale_fill_manual(values = func_colors, drop = FALSE, guide = "none") +
     labs(title = title_txt) +
@@ -350,6 +396,7 @@ make_pair_plot <- function(prophage_id, bacterial_id,
 
 
 
+
 # ------------------ DEBUG ONE PANEL FIRST ------------------
 
 p1 <- make_pair_plot(
@@ -357,7 +404,8 @@ p1 <- make_pair_plot(
   bacterial_id = pairs$bacterial_fragment_id[1],
   phold_df = phold,
   blast_df = blast,
-  proph_tbl = proph_tbl
+  proph_tbl = proph_tbl,
+  crop_pad = 10000
 )
 
 
@@ -413,8 +461,18 @@ plots <- purrr::pmap(
 
 final <- cowplot::plot_grid(plotlist = plots, ncol = N_COL, align = "hv")
 
-ggsave(OUT_PDF, final, width = 14, height = 30, device = cairo_pdf)
-ggsave(OUT_PNG, final, width = 14, height = 30, dpi = 600)
+ggsave(OUT_PNG, final, width = 25, height = 20, dpi = 600)
+
+ggsave(
+  filename = OUT_SVG,
+  plot = final,
+  width = 25,
+  height = 20,
+  device = svglite::svglite,
+  bg = "white"
+)
+
+#ggsave(OUT_PDF, final, width = 25, height = 20, device = pdf)
 
 message("Saved: ", OUT_PNG)
-message("Saved: ", OUT_PDF)
+#message("Saved: ", OUT_PDF)
