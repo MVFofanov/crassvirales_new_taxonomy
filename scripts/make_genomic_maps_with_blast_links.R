@@ -28,7 +28,7 @@ MIN_PID <- 0
 SHOW_SELF_LINKS <- FALSE
 COLOR_LINKS_BY_PID <- TRUE
 
-GENE_HEIGHT <- 0.7     # visual height of arrows (y units)
+GENE_HEIGHT <- 0.8     # visual height of arrows (y units)
 SEQ_LINEWIDTH <- 0.35  # thickness of seq baseline
 LINK_LINEWIDTH <- 0.25
 GENE_OUTLINE <- 0.20
@@ -344,6 +344,13 @@ make_pair_plot <- function(prophage_id, bacterial_id,
   p <- gggenomes(seqs = seqs, genes = genes, links = links) +
     geom_seq(linewidth = SEQ_LINEWIDTH)
   
+  # p <- p +
+  #   geom_seq_label(
+  #     aes(label = seq_id),
+  #     size = 2.8,
+  #     nudge_y = 0.55
+  #   )
+  
   # prophage box on prophage fragment (unchanged)
   box_df <- calc_prophage_box_for_prophage_fragment(prophage_id, proph_tbl)
   if (nrow(box_df) > 0) {
@@ -366,12 +373,28 @@ make_pair_plot <- function(prophage_id, bacterial_id,
   if (nrow(links) > 0) {
     if (color_links_by_pid) {
       p <- p +
-        geom_link(aes(color = pident), alpha = 0.25, linewidth = LINK_LINEWIDTH) +
-        scale_color_viridis_c(option = "C", end = 0.95, guide = "none")
+        geom_link(
+          aes(color = pident),
+          alpha = 0.25,
+          linewidth = LINK_LINEWIDTH
+        ) +
+        scale_color_viridis_c(
+          option = "C",
+          end = 0.95,
+          name = "BLAST pident (%)"
+        )
+      
     } else {
       p <- p + geom_link(color = "grey50", alpha = 0.20, linewidth = LINK_LINEWIDTH)
     }
   }
+  
+  p <- p +
+    geom_seq_label(
+      aes(label = seq_id),
+      size = 2.8,
+      nudge_y = 0.55
+    )
   
   # genes
   p <- p +
@@ -380,12 +403,15 @@ make_pair_plot <- function(prophage_id, bacterial_id,
               size = 2.2,
               stroke = GENE_OUTLINE,
               colour = "black") +
-    scale_fill_manual(values = func_colors, drop = FALSE, guide = "none") +
+    scale_fill_manual(
+      values = func_colors,
+      drop = FALSE,
+      name = "PHOLD function"
+    ) +
     labs(title = title_txt) +
     theme_bw(base_size = 10) +
     theme(
       plot.title = element_text(size = 14, face = "bold"),
-      legend.position = "none",
       panel.grid = element_blank(),
       axis.title = element_blank()
     ) +
@@ -458,16 +484,32 @@ plots <- purrr::pmap(
   }
 )
 
+legend_plot <- plots[[1]] + theme(legend.position = "right")
+legend_g <- cowplot::get_legend(legend_plot)
 
-final <- cowplot::plot_grid(plotlist = plots, ncol = N_COL, align = "hv")
+plots_nolegend <- purrr::map(plots, ~ .x + theme(legend.position = "none"))
 
-ggsave(OUT_PNG, final, width = 25, height = 20, dpi = 600)
+main_grid <- cowplot::plot_grid(plotlist = plots_nolegend, ncol = N_COL, align = "hv")
+
+final <- cowplot::plot_grid(
+  main_grid,
+  legend_g,
+  ncol = 2,
+  rel_widths = c(1, 0.18)   # подстрой ширину легенды
+)
+
+#final <- cowplot::plot_grid(plotlist = plots, ncol = N_COL, align = "hv")
+
+WIDTH <- 18
+HEIGTH <- 14
+
+ggsave(OUT_PNG, final, width = WIDTH, height = HEIGTH, dpi = 600)
 
 ggsave(
   filename = OUT_SVG,
   plot = final,
-  width = 25,
-  height = 20,
+  width = WIDTH,
+  height = HEIGTH,
   device = svglite::svglite,
   bg = "white"
 )
