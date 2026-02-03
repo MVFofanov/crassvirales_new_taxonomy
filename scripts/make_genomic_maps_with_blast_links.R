@@ -11,6 +11,7 @@ WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/integrat
 PHOLD_TSV <- file.path(WD, "all_phold_per_cds_predictions.tsv")
 BLAST_TSV <- file.path(WD, "all_vs_all.blastn.tsv")
 PAIRS_TSV <- file.path(WD, "pairs_prophage_with_flanks_vs_bacterial.tsv")
+PROPHAGE_TSV <- file.path(WD, "Crassphage_prophage_analysis_annotation_ncbi_with_samples_and_countries_crassvirales_clade_flanks.tsv")
 
 OUT_PNG <- file.path(WD, "prophage_vs_bacterial_2x8.png")
 OUT_PDF <- file.path(WD, "prophage_vs_bacterial_2x8.pdf")
@@ -94,7 +95,21 @@ pairs <- read_tsv(PAIRS_TSV, show_col_types = FALSE) %>%
   rename(prophage_id = prophage, bacterial_id = bacterial) %>%
   mutate(pair_index = row_number())
 
-stopifnot(nrow(pairs) == 16)
+# stopifnot(nrow(pairs) == 16)
+
+proph_tbl <- read_tsv(PROPHAGE_TSV, show_col_types = FALSE) %>%
+  transmute(
+    bacterial_id   = as.character(bacterial_id),
+    prophage_start = as.integer(prophage_start),
+    prophage_end   = as.integer(prophage_end),
+    genome_id      = as.character(genome_id)
+  ) %>%
+  filter(!is.na(bacterial_id), !is.na(prophage_start), !is.na(prophage_end)) %>%
+  mutate(
+    prophage_min = pmin(prophage_start, prophage_end),
+    prophage_max = pmax(prophage_start, prophage_end)
+  )
+
 
 # ------------------ HELPERS ------------------
 
@@ -139,8 +154,57 @@ make_self_links_schema <- function(blast_df, ids, min_align_len, min_pid) {
     )
 }
 
+parse_fragment_id <- function(x) {
+  # expects: <bacterial_contig>_<start>-<end>
+  # example: CP192583.1_2500000-4750000
+  m <- stringr::str_match(x, "^(.*)_(\\d+)-(\\d+)$")
+  if (is.na(m[1,1])) {
+    return(tibble(
+      seq_id = x,
+      bacterial_id = NA_character_,
+      frag_start = NA_integer_,
+      frag_end = NA_integer_
+    ))
+  }
+  tibble(
+    seq_id = x,
+    bacterial_id = m[1,2],
+    frag_start = as.integer(m[1,3]),
+    frag_end   = as.integer(m[1,4])
+  )
+}
+
+calc_prophage_boxes_for_ids <- function(ids, proph_tbl) {
+  frag_meta <- purrr::map_dfr(ids, parse_fragment_id) %>%
+    filter(!is.na(bacterial_id), !is.na(frag_start), !is.na(frag_end)) %>%
+    mutate(
+      frag_min = pmin(frag_start, frag_end),
+      frag_max = pmax(frag_start, frag_end)
+    )
+  
+  if (nrow(frag_meta) == 0) return(tibble())
+  
+  # join prophages by bacterial contig and keep overlaps with fragment
+  boxes <- frag_meta %>%
+    left_join(proph_tbl, by = "bacterial_id") %>%
+    filter(!is.na(prophage_min), !is.na(prophage_max)) %>%
+    filter(prophage_max >= frag_min, prophage_min <= frag_max) %>%  # overlap
+    mutate(
+      abs_box_start = pmax(prophage_min, frag_min),
+      abs_box_end   = pmin(prophage_max, frag_max),
+      rel_start = abs_box_start - frag_min + 1L,
+      rel_end   = abs_box_end   - frag_min + 1L,
+      rel_start = pmax(rel_start, 1L),
+      rel_end   = pmax(rel_end, 1L)
+    ) %>%
+    transmute(seq_id, rel_start, rel_end, genome_id)
+  
+  boxes
+}
+
+
 make_pair_plot <- function(prophage_id, bacterial_id,
-                           phold_df, blast_df,
+                           phold_df, blast_df, proph_tbl,
                            title_txt = NULL,
                            min_align_len = 200,
                            min_pid = 0,
@@ -175,6 +239,21 @@ make_pair_plot <- function(prophage_id, bacterial_id,
     ) %>%
     arrange(bin_id)
   
+  # --- prophage boxes (relative coordinates within fragment) ---
+  box_df <- calc_prophage_boxes_for_ids(ids, proph_tbl)
+  
+  # gggenomes tracks are y=1..n in the order of seqs
+  if (nrow(box_df) > 0) {
+    box_df <- box_df %>%
+      mutate(
+        y = match(seq_id, seqs$seq_id),
+        ymin = y - 0.45,
+        ymax = y + 0.45,
+        xmin = pmin(rel_start, rel_end),
+        xmax = pmax(rel_start, rel_end)
+      )
+  }
+  
   # --- links ---
   links_pb <- make_links_schema(blast_df, prophage_id, bacterial_id, min_align_len, min_pid)
   links_self <- make_self_links_schema(blast_df, ids, min_align_len, min_pid)
@@ -184,6 +263,20 @@ make_pair_plot <- function(prophage_id, bacterial_id,
   
   p <- gggenomes(seqs = seqs, genes = genes, links = links) +
     geom_seq(linewidth = SEQ_LINEWIDTH)
+  
+  # orange transparent box BEHIND links/genes
+  if (nrow(box_df) > 0) {
+    p <- p +
+      geom_rect(
+        data = box_df,
+        aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+        inherit.aes = FALSE,
+        fill = "orange",
+        alpha = 0.20,
+        colour = "orange",
+        linewidth = 0.4
+      )
+  }
   
   # links (geom_link is a filled polygon; use fill mapping)
   if (nrow(links) > 0) {
@@ -226,19 +319,7 @@ p1 <- make_pair_plot(
   bacterial_id = pairs$bacterial_id[1],
   phold_df = phold,
   blast_df = blast,
-  title_txt = pairs$prophage_id[1],
-  min_align_len = MIN_ALIGN_LEN,
-  min_pid = MIN_PID,
-  show_self_links = SHOW_SELF_LINKS,
-  color_links_by_pid = COLOR_LINKS_BY_PID,
-  func_colors = FUNC_COLORS
-)
-
-p1 <- make_pair_plot(
-  prophage_id  = pairs$prophage_id[1],
-  bacterial_id = pairs$bacterial_id[1],
-  phold_df = phold,
-  blast_df = blast
+  proph_tbl = proph_tbl
 )
 
 p1 %>% track_info
@@ -251,6 +332,7 @@ message("Saved debug panel: ", DEBUG_ONE)
 # ------------------ BUILD PANELS ------------------
 
 plot_order <- c(rbind(1:8, 9:16))
+# plot_order <- c(rbind(1:4, 5:8, 9:12, 13:16))
 pairs_ordered <- pairs %>% slice(plot_order)
 
 plots <- purrr::pmap(
@@ -261,6 +343,7 @@ plots <- purrr::pmap(
       bacterial_id = bact,
       phold_df = phold,
       blast_df = blast,
+      proph_tbl = proph_tbl,
       title_txt = proph,
       min_align_len = MIN_ALIGN_LEN,
       min_pid = MIN_PID,
