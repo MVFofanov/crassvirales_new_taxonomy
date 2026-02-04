@@ -15,6 +15,7 @@ PAIRS_TSV <- file.path(WD, "pairs_prophage_with_flanks_vs_bacterial.tsv")
 PROPHAGE_TSV <- file.path(WD, "Crassphage_prophage_analysis_annotation_ncbi_with_samples_and_countries_crassvirales_clade_flanks.tsv")
 VIRUS_SUMMARY_TSV <- file.path(WD, "all_virus_summary.tsv")
 TRNA_GFF <- file.path(WD, "all_trnascan_out.gff")
+TAX_TSV <- file.path(WD, "all_contigs_virus_summary_ge_10kb_sorted_by_seq_name_ids_uniq_taxonomy.txt")
 
 OUT_PNG <- file.path(WD, "prophage_vs_bacterial_2x8.png")
 OUT_SVG <- file.path(WD, "prophage_vs_bacterial_2x8.svg")
@@ -156,6 +157,28 @@ trna <- read_tsv(
     strand = as.character(strand),
     x = (start + end) / 2
   )
+
+tax_raw <- read_tsv(TAX_TSV, show_col_types = FALSE) %>%
+  transmute(
+    accession = str_trim(as.character(accession)),
+    taxonomy  = str_trim(as.character(taxonomy))
+  )
+
+tax_tbl <- read_tsv(TAX_TSV, show_col_types = FALSE) %>%
+  transmute(
+    accession = as.character(accession),
+    taxonomy  = as.character(taxonomy)
+  ) %>%
+  mutate(
+    # split by ";" and trim whitespace
+    tax_list = str_split(taxonomy, "\\s*;\\s*"),
+    class = map_chr(tax_list, ~ if (length(.x) >= 4)  .x[[4]] else NA_character_),
+    family= map_chr(tax_list, ~ if (length(.x) >= 7)  .x[[7]] else NA_character_),
+    genus = map_chr(tax_list, ~ if (length(.x) >= 8)  .x[[8]] else NA_character_),
+    tax_short = str_c(class, family, genus, sep = "; ")
+  ) %>%
+  select(-tax_list)
+
 
 # ------------------ HELPERS ------------------
 
@@ -301,9 +324,77 @@ crop_shift_trna <- function(trna_df, prophage_id, bacterial_id, crop_win) {
   out
 }
 
+seqid_to_accession <- function(x) {
+  # "NZ_OZ245719.1_3456868-3729269" -> "NZ_OZ245719.1"
+  str_replace(x, "_\\d+-\\d+$", "")
+}
+
+make_tax_label_df <- function(p, seqs, tax_tbl, off = 2, x_pad = 2000) {
+  # seq positions (y) from gggenomes
+  seq_y <- p %>% pull_seqs() %>% distinct(seq_id, y)
+  top_y <- max(seq_y$y)  # gggenomes often has reversed y
+  
+  # right edge per seq from seqs table
+  # (seqs has length already; for bacterial it’s crop_len if you set it)
+  seq_right <- seqs %>%
+    select(seq_id, length) %>%
+    mutate(x_right = as.numeric(length))
+  
+  # join taxonomy
+  out <- seq_y %>%
+    left_join(seq_right, by = "seq_id") %>%
+    mutate(
+      accession = seqid_to_accession(seq_id)
+    ) %>%
+    left_join(tax_tbl, by = "accession") %>%
+    mutate(
+      is_top = (y == top_y),
+      y_lab  = if_else(is_top, y - off, y + off),
+      vjust  = if_else(is_top, 1, 0),
+      x_lab  = x_right + x_pad,
+      label  = if_else(is.na(tax_short) | tax_short == "NA; NA; NA",
+                       accession,   # fallback if taxonomy missing
+                       tax_short)
+    )
+  
+  out
+}
+
+debug_taxonomy_matches <- function(seq_ids, tax_raw) {
+  tibble(seq_id = unique(as.character(seq_ids))) %>%
+    mutate(
+      accession = seqid_to_accession(seq_id),
+      acc_plus_NZ  = if_else(str_starts(accession, "NZ_"), accession, paste0("NZ_", accession)),
+      acc_minus_NZ = str_replace(accession, "^NZ_", "")
+    ) %>%
+    left_join(tax_raw %>% rename(tax_exact = taxonomy), by = c("accession" = "accession")) %>%
+    left_join(tax_raw %>% rename(tax_plus_NZ = taxonomy), by = c("acc_plus_NZ" = "accession")) %>%
+    left_join(tax_raw %>% rename(tax_minus_NZ = taxonomy), by = c("acc_minus_NZ" = "accession")) %>%
+    mutate(
+      match_type = case_when(
+        !is.na(tax_exact) ~ "exact",
+        !is.na(tax_plus_NZ) ~ "matched_by_adding_NZ_",
+        !is.na(tax_minus_NZ) ~ "matched_by_removing_NZ_",
+        TRUE ~ "NO_MATCH"
+      ),
+      taxonomy_found = coalesce(tax_exact, tax_plus_NZ, tax_minus_NZ)
+    ) %>%
+    select(seq_id, accession, match_type, taxonomy_found, tax_exact, tax_plus_NZ, tax_minus_NZ)
+}
+
+tax_last4 <- function(tax) {
+  if (is.na(tax) || tax == "") return(NA_character_)
+  parts <- str_split(tax, "\\s*;\\s*")[[1]]
+  parts <- parts[parts != ""]
+  if (length(parts) == 0) return(NA_character_)
+  paste(tail(parts, 4), collapse = "; ")
+}
+
 
 make_pair_plot <- function(prophage_id, bacterial_id,
-                           phold_df, blast_df, virus_sum_tbl, trna_df,
+                           phold_df, blast_df, virus_sum_tbl, trna_df, tax_tbl,
+                           prophage_taxonomy = NA_character_,
+                           bacterial_taxonomy = NA_character_,
                            title_txt = NULL,
                            min_align_len = 200,
                            min_pid = 0,
@@ -481,7 +572,7 @@ make_pair_plot <- function(prophage_id, bacterial_id,
     mutate(
       label = seq_id,
       is_top = (y == top_y),
-      y_lab  = if_else(is_top, y - off, y + off),   # NOTE: swapped signs
+      y_lab  = if_else(is_top, y + off, y - off),   # NOTE: swapped signs
       vjust  = if_else(is_top, 1, 0)                # above: anchor bottom; below: anchor top
     )
   
@@ -493,6 +584,47 @@ make_pair_plot <- function(prophage_id, bacterial_id,
       size = 2.8,
       hjust = 0
     )
+  
+  # --- right-side taxonomy labels INSIDE panel (aligned + right-justified) ---
+  seq_y <- p %>% pull_seqs() %>% distinct(seq_id, y)
+  top_y <- max(seq_y$y)
+  off   <- 2
+  
+  x_max <- max(
+    seqs$length,
+    genes$end,
+    if (nrow(links) > 0) max(c(links$end, links$end2), na.rm = TRUE) else 0,
+    na.rm = TRUE
+  )
+  
+  x_anchor <- x_max * 0.98   # <-- inside the panel (tune 0.95–0.99)
+  
+  tax_df <- seq_y %>%
+    mutate(
+      tax = case_when(
+        seq_id == prophage_id  ~ tax_last4(prophage_taxonomy),
+        seq_id == bacterial_id ~ tax_last4(bacterial_taxonomy),
+        TRUE ~ NA_character_
+      ),
+      is_top = (y == top_y),
+      y_lab  = if_else(is_top, y + off, y - off),
+      vjust  = if_else(is_top, 1, 0),
+      x_lab  = x_anchor
+    ) %>%
+    filter(!is.na(tax), tax != "")
+  
+  p <- p +
+    geom_text(
+      data = tax_df,
+      aes(x = x_lab, y = y_lab, label = tax, vjust = vjust),
+      inherit.aes = FALSE,
+      size = 2.4,
+      hjust = 1   # <-- right-align so it extends LEFT, not outside
+    )
+  
+  
+  
+  
   
   # genes
   p <- p +
@@ -571,9 +703,15 @@ p1 <- make_pair_plot(
   blast_df = blast,
   virus_sum_tbl = virus_sum,
   trna_df = trna,
+  tax_tbl = tax_tbl,
   crop_pad = 10000
 )
 
+seq_ids_p1 <- p1 %>% pull_seqs() %>% pull(seq_id)
+debug_taxonomy_matches(seq_ids_p1, tax_raw) %>% print(n = 50)
+
+seq_ids_all <- unique(c(pairs$prophage_fragment_id, pairs$bacterial_fragment_id))
+debug_taxonomy_matches(seq_ids_all, tax_raw) %>% print(n = 200)
 
 p1 %>% pull_seqs() %>% select(seq_id, bin_id, y)
 
@@ -606,8 +744,13 @@ plot_order <- c(rbind(1:8, 9:16))
 pairs_ordered <- pairs %>% slice(plot_order)
 
 plots <- purrr::pmap(
-  list(pairs_ordered$prophage_fragment_id, pairs_ordered$bacterial_fragment_id),
-  function(proph, bact) {
+  list(
+    pairs_ordered$prophage_fragment_id,
+    pairs_ordered$bacterial_fragment_id,
+    pairs_ordered$prophage_taxonomy,
+    pairs_ordered$bacterial_taxonomy
+  ),
+  function(proph, bact, proph_tax, bact_tax) {
     make_pair_plot(
       prophage_id  = proph,
       bacterial_id = bact,
@@ -615,6 +758,9 @@ plots <- purrr::pmap(
       blast_df = blast,
       virus_sum_tbl = virus_sum,
       trna_df = trna,
+      tax_tbl = tax_tbl,   # <- your function signature includes this
+      prophage_taxonomy = proph_tax,
+      bacterial_taxonomy = bact_tax,
       title_txt = proph,
       min_align_len = MIN_ALIGN_LEN,
       min_pid = MIN_PID,
@@ -624,6 +770,8 @@ plots <- purrr::pmap(
     )
   }
 )
+
+
 
 legend_plot <- plots[[1]] + theme(legend.position = "right")
 legend_g <- cowplot::get_legend(legend_plot)
