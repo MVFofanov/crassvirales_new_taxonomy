@@ -14,6 +14,7 @@ BLAST_TSV <- file.path(WD, "all_vs_all.blastn.tsv")
 PAIRS_TSV <- file.path(WD, "pairs_prophage_with_flanks_vs_bacterial.tsv")
 PROPHAGE_TSV <- file.path(WD, "Crassphage_prophage_analysis_annotation_ncbi_with_samples_and_countries_crassvirales_clade_flanks.tsv")
 VIRUS_SUMMARY_TSV <- file.path(WD, "all_virus_summary.tsv")
+TRNA_GFF <- file.path(WD, "all_trnascan_out.gff")
 
 OUT_PNG <- file.path(WD, "prophage_vs_bacterial_2x8.png")
 OUT_SVG <- file.path(WD, "prophage_vs_bacterial_2x8.svg")
@@ -141,6 +142,20 @@ virus_sum <- read_tsv(VIRUS_SUMMARY_TSV, show_col_types = FALSE) %>%
   ) %>%
   select(fragment_id, box_min, box_max, box_group, box_color, taxonomy)
 
+trna <- read_tsv(
+  TRNA_GFF,
+  comment = "#",
+  col_names = c("seq_id","source","type","start","end","score","strand","phase","attributes"),
+  show_col_types = FALSE
+) %>%
+  filter(type == "tRNA") %>%
+  transmute(
+    seq_id = as.character(seq_id),
+    start = as.integer(start),
+    end   = as.integer(end),
+    strand = as.character(strand),
+    x = (start + end) / 2
+  )
 
 # ------------------ HELPERS ------------------
 
@@ -250,9 +265,45 @@ calc_crop_from_links <- function(links_pb, pad = 2000) {
   )
 }
 
+extract_gene_labels <- function(genes_df) {
+  genes_df %>%
+    mutate(
+      product_lc = tolower(product),
+      label = case_when(
+        str_detect(product_lc, "terminase large subunit") ~ "t",
+        str_detect(product_lc, "\\bintegrase\\b") ~ "i",
+        TRUE ~ NA_character_
+      ),
+      x = (start + end) / 2
+    ) %>%
+    filter(!is.na(label)) %>%
+    select(seq_id, start, end, strand, product, label, x)
+}
+
+crop_shift_trna <- function(trna_df, prophage_id, bacterial_id, crop_win) {
+  if (is.null(trna_df) || nrow(trna_df) == 0) return(trna_df)
+  
+  out <- trna_df %>%
+    filter(seq_id %in% c(prophage_id, bacterial_id)) %>%
+    mutate(is_bacterial = (seq_id == bacterial_id))
+  
+  if (!is.null(crop_win)) {
+    out <- out %>%
+      # keep only tRNAs that overlap crop on bacterial
+      filter(!is_bacterial | (end >= crop_win$crop_start & start <= crop_win$crop_end)) %>%
+      mutate(
+        start = if_else(is_bacterial, start - crop_win$crop_start + 1L, start),
+        end   = if_else(is_bacterial, end   - crop_win$crop_start + 1L, end),
+        x     = if_else(is_bacterial, (start + end) / 2, x)
+      )
+  }
+  
+  out
+}
+
 
 make_pair_plot <- function(prophage_id, bacterial_id,
-                           phold_df, blast_df, virus_sum_tbl,
+                           phold_df, blast_df, virus_sum_tbl, trna_df,
                            title_txt = NULL,
                            min_align_len = 200,
                            min_pid = 0,
@@ -269,6 +320,8 @@ make_pair_plot <- function(prophage_id, bacterial_id,
   # --- crop window from plotted links (bacterial coords are start2/end2) ---
   crop_win <- calc_crop_from_links(links_pb, pad = crop_pad)
   
+  trna_pair <- crop_shift_trna(trna_df, prophage_id, bacterial_id, crop_win)
+  
   # --- genes (PHOLD) ---
   genes_raw <- phold_df %>%
     filter(contig_id %in% ids) %>%
@@ -278,7 +331,8 @@ make_pair_plot <- function(prophage_id, bacterial_id,
       gene_min = as.integer(gene_min),
       gene_max = as.integer(gene_max),
       strand = as.character(strand),
-      func = func
+      func = func,
+      product = as.character(product)   # <-- add this
     )
   
   if (nrow(genes_raw) == 0) stop("No genes for pair: ", prophage_id, " vs ", bacterial_id)
@@ -305,7 +359,8 @@ make_pair_plot <- function(prophage_id, bacterial_id,
       end   = as.integer(end),
       strand,
       type = "CDS",
-      func
+      func,
+      product   # <-- add this
     )
   
   if (nrow(genes) == 0) stop("All genes removed by crop for pair: ", prophage_id, " vs ", bacterial_id)
@@ -416,11 +471,27 @@ make_pair_plot <- function(prophage_id, bacterial_id,
     }
   }
   
+  # --- sequence labels: top above, bottom below (works with reversed y) ---
+  seq_y <- p %>% pull_seqs() %>% distinct(seq_id, y)
+  
+  top_y <- max(seq_y$y)   # in gggenomes, this is often the TOP track visually
+  off   <- 2 #0.65
+  
+  label_df <- seq_y %>%
+    mutate(
+      label = seq_id,
+      is_top = (y == top_y),
+      y_lab  = if_else(is_top, y - off, y + off),   # NOTE: swapped signs
+      vjust  = if_else(is_top, 1, 0)                # above: anchor bottom; below: anchor top
+    )
+  
   p <- p +
-    geom_seq_label(
-      aes(label = seq_id),
+    geom_text(
+      data = label_df,
+      aes(x = 1, y = y_lab, label = label, vjust = vjust),
+      inherit.aes = FALSE,
       size = 2.8,
-      nudge_y = 0.55
+      hjust = 0
     )
   
   # genes
@@ -444,6 +515,47 @@ make_pair_plot <- function(prophage_id, bacterial_id,
     ) +
     coord_cartesian(clip = "off")
   
+  gene_labels <- extract_gene_labels(genes)
+  
+  if (nrow(gene_labels) > 0) {
+    y_df <- p %>% pull_seqs() %>% distinct(seq_id, y)
+    
+    gene_labels <- gene_labels %>%
+      left_join(y_df, by = "seq_id") %>%
+      filter(!is.na(y))
+    
+    p <- p +
+      geom_text(
+        data = gene_labels,
+        aes(x = x, y = y, label = label),
+        inherit.aes = FALSE,
+        size = 3.2,
+        fontface = "bold",
+        vjust = -0.9
+      )
+  }
+  
+  # --- tRNA labels as "*" ---
+  if (!is.null(trna_pair) && nrow(trna_pair) > 0) {
+    y_df <- p %>% pull_seqs() %>% distinct(seq_id, y)
+    
+    trna_lab <- trna_pair %>%
+      left_join(y_df, by = "seq_id") %>%
+      filter(!is.na(y)) %>%
+      mutate(y_star = y + 0.35)  # tweak vertical placement
+    
+    p <- p +
+      geom_text(
+        data = trna_lab,
+        aes(x = x, y = y_star),
+        label = "*",
+        inherit.aes = FALSE,
+        size = 4.2,
+        fontface = "bold"
+      )
+  }
+  
+  
   p
 }
 
@@ -453,24 +565,25 @@ make_pair_plot <- function(prophage_id, bacterial_id,
 # ------------------ DEBUG ONE PANEL FIRST ------------------
 
 p1 <- make_pair_plot(
-  prophage_id  = pairs$prophage_fragment_id[1],
-  bacterial_id = pairs$bacterial_fragment_id[1],
+  prophage_id  = pairs$prophage_fragment_id[10],
+  bacterial_id = pairs$bacterial_fragment_id[10],
   phold_df = phold,
   blast_df = blast,
   virus_sum_tbl = virus_sum,
+  trna_df = trna,
   crop_pad = 10000
 )
 
 
 p1 %>% pull_seqs() %>% select(seq_id, bin_id, y)
 
-parse_fragment_id(pairs$prophage_fragment_id[1])
-parse_fragment_id(pairs$bacterial_fragment_id[1])
+parse_fragment_id(pairs$prophage_fragment_id[10])
+parse_fragment_id(pairs$bacterial_fragment_id[10])
 
 proph_tbl %>%
   filter(bacterial_id %in% c(
-    parse_fragment_id(pairs$prophage_fragment_id[1])$base_contig,
-    parse_fragment_id(pairs$bacterial_fragment_id[1])$base_contig
+    parse_fragment_id(pairs$prophage_fragment_id[10])$base_contig,
+    parse_fragment_id(pairs$bacterial_fragment_id[10])$base_contig
   )) %>%
   select(bacterial_id, prophage_start, prophage_end, genome_id) %>%
   head(5)
@@ -501,6 +614,7 @@ plots <- purrr::pmap(
       phold_df = phold,
       blast_df = blast,
       virus_sum_tbl = virus_sum,
+      trna_df = trna,
       title_txt = proph,
       min_align_len = MIN_ALIGN_LEN,
       min_pid = MIN_PID,
