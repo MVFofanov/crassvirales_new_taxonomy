@@ -13,6 +13,7 @@ PHOLD_TSV <- file.path(WD, "all_phold_per_cds_predictions.tsv")
 BLAST_TSV <- file.path(WD, "all_vs_all.blastn.tsv")
 PAIRS_TSV <- file.path(WD, "pairs_prophage_with_flanks_vs_bacterial.tsv")
 PROPHAGE_TSV <- file.path(WD, "Crassphage_prophage_analysis_annotation_ncbi_with_samples_and_countries_crassvirales_clade_flanks.tsv")
+VIRUS_SUMMARY_TSV <- file.path(WD, "all_virus_summary.tsv")
 
 OUT_PNG <- file.path(WD, "prophage_vs_bacterial_2x8.png")
 OUT_SVG <- file.path(WD, "prophage_vs_bacterial_2x8.svg")
@@ -44,6 +45,12 @@ FUNC_COLORS <- c(
   "tail" = "#74ee15",
   "transcription regulation" = "#ffe700",
   "unknown" = "#AAAAAA"
+)
+
+# box colors (edit as you like)
+BOX_COLORS <- c(
+  "Crassvirales" = "#ff7f00",
+  "Other"        = "#FFA500"
 )
 
 # ------------------ READ INPUTS ------------------
@@ -102,18 +109,37 @@ pairs <- read_tsv(PAIRS_TSV, show_col_types = FALSE) %>%
 
 # stopifnot(nrow(pairs) == 16)
 
-proph_tbl <- read_tsv(PROPHAGE_TSV, show_col_types = FALSE) %>%
-  transmute(
-    bacterial_id   = as.character(bacterial_id),
-    prophage_start = as.integer(prophage_start),
-    prophage_end   = as.integer(prophage_end),
-    genome_id      = as.character(genome_id)
-  ) %>%
-  filter(!is.na(bacterial_id), !is.na(prophage_start), !is.na(prophage_end)) %>%
+virus_sum <- read_tsv(VIRUS_SUMMARY_TSV, show_col_types = FALSE) %>%
   mutate(
-    prophage_min = pmin(prophage_start, prophage_end),
-    prophage_max = pmax(prophage_start, prophage_end)
-  )
+    # fragment id is left part before "|"
+    fragment_id = str_split_fixed(seq_name, "\\|", 2)[,1],
+    # prefer the explicit coordinates column if present
+    coord_txt   = as.character(coordinates),
+    # fallback: parse from seq_name suffix "provirus_123_456"
+    suffix_txt  = str_split_fixed(seq_name, "\\|", 2)[,2]
+  ) %>%
+  mutate(
+    # parse "start-end" from coordinates
+    box_start = suppressWarnings(as.integer(str_match(coord_txt, "^(\\d+)-(\\d+)$")[,2])),
+    box_end   = suppressWarnings(as.integer(str_match(coord_txt, "^(\\d+)-(\\d+)$")[,3]))
+  ) %>%
+  mutate(
+    # fallback parse from suffix (e.g. "provirus_375_106207") if coordinates missing
+    box_start = if_else(is.na(box_start),
+                        suppressWarnings(as.integer(str_match(suffix_txt, "provirus_(\\d+)[_-](\\d+)")[,2])),
+                        box_start),
+    box_end   = if_else(is.na(box_end),
+                        suppressWarnings(as.integer(str_match(suffix_txt, "provirus_(\\d+)[_-](\\d+)")[,3])),
+                        box_end)
+  ) %>%
+  filter(!is.na(fragment_id), !is.na(box_start), !is.na(box_end)) %>%
+  mutate(
+    box_min = pmin(box_start, box_end),
+    box_max = pmax(box_start, box_end),
+    box_group = if_else(str_detect(taxonomy, "Crassvirales"), "Crassvirales", "Other"),
+    box_color = unname(BOX_COLORS[box_group])
+  ) %>%
+  select(fragment_id, box_min, box_max, box_group, box_color, taxonomy)
 
 
 # ------------------ HELPERS ------------------
@@ -198,43 +224,18 @@ parse_fragment_id <- function(x) {
 #   boxes
 # }
 
-calc_prophage_box_for_prophage_fragment <- function(prophage_fragment_id, proph_tbl) {
-  
-  frag <- parse_fragment_id(prophage_fragment_id)
-  
-  # prophage rows for this base contig
-  cand <- proph_tbl %>%
-    filter(bacterial_id == frag$base_contig) %>%
+calc_virus_boxes_for_fragments <- function(ids, virus_sum_tbl) {
+  virus_sum_tbl %>%
+    filter(fragment_id %in% ids) %>%
     transmute(
-      prophage_start = as.integer(prophage_start),
-      prophage_end   = as.integer(prophage_end)
+      seq_id = fragment_id,
+      box_start = as.integer(box_min),
+      box_end   = as.integer(box_max),
+      box_group,
+      box_color
     )
-  
-  if (nrow(cand) == 0) return(tibble())
-  
-  # pick the prophage that overlaps this fragment the most
-  overlap_len <- function(a1, a2, b1, b2) pmax(0L, pmin(a2, b2) - pmax(a1, b1) + 1L)
-  
-  cand <- cand %>%
-    mutate(ov = overlap_len(frag$frag_start, frag$frag_end, prophage_start, prophage_end)) %>%
-    arrange(desc(ov))
-  
-  if (cand$ov[1] <= 0) {
-    warning("No prophage interval overlaps prophage fragment: ", prophage_fragment_id)
-    return(tibble())
-  }
-  
-  # convert absolute prophage coords -> relative fragment coords
-  box_start <- pmax(1L, cand$prophage_start[1] - frag$frag_start + 1L)
-  box_end   <- pmin(frag$frag_end - frag$frag_start + 1L,
-                    cand$prophage_end[1] - frag$frag_start + 1L)
-  
-  tibble(
-    seq_id = prophage_fragment_id,
-    box_start = as.integer(box_start),
-    box_end   = as.integer(box_end)
-  )
 }
+
 
 calc_crop_from_links <- function(links_pb, pad = 2000) {
   # links_pb has columns: start2/end2 on bacterial, start/end on prophage
@@ -251,7 +252,7 @@ calc_crop_from_links <- function(links_pb, pad = 2000) {
 
 
 make_pair_plot <- function(prophage_id, bacterial_id,
-                           phold_df, blast_df, proph_tbl,
+                           phold_df, blast_df, virus_sum_tbl,
                            title_txt = NULL,
                            min_align_len = 200,
                            min_pid = 0,
@@ -352,22 +353,48 @@ make_pair_plot <- function(prophage_id, bacterial_id,
   #   )
   
   # prophage box on prophage fragment (unchanged)
-  box_df <- calc_prophage_box_for_prophage_fragment(prophage_id, proph_tbl)
+  # --- provirus boxes from all_virus_summary.tsv (relative coords) ---
+  box_df <- calc_virus_boxes_for_fragments(ids, virus_sum_tbl)
+  
+  # shift bacterial boxes into cropped coordinate system (same as genes/links)
+  if (!is.null(crop_win) && nrow(box_df) > 0) {
+    box_df <- box_df %>%
+      mutate(
+        is_bacterial = (seq_id == bacterial_id),
+        box_start = if_else(is_bacterial, as.integer(box_start - crop_win$crop_start + 1L), box_start),
+        box_end   = if_else(is_bacterial, as.integer(box_end   - crop_win$crop_start + 1L), box_end)
+      ) %>%
+      # keep only boxes that still overlap the cropped view
+      filter(!(seq_id == bacterial_id) | (pmax(box_start, box_end) >= 1L)) %>%
+      mutate(
+        box_start = pmax(1L, box_start),
+        box_end   = pmax(1L, box_end)
+      ) %>%
+      select(-is_bacterial)
+  }
+  
   if (nrow(box_df) > 0) {
     y_df <- p %>% pull_seqs() %>% distinct(seq_id, y)
     box_df <- box_df %>%
       left_join(y_df, by = "seq_id") %>%
-      mutate(ymin = y - 0.45, ymax = y + 0.45)
+      filter(!is.na(y)) %>%
+      mutate(
+        ymin = y - 0.45,
+        ymax = y + 0.45
+      )
     
     p <- p +
       geom_rect(
         data = box_df,
         aes(xmin = box_start, xmax = box_end, ymin = ymin, ymax = ymax),
         inherit.aes = FALSE,
-        fill = "orange", alpha = 0.18,
-        color = "orange", linewidth = 0.6
+        fill = box_df$box_color,   # vector -> per-row colors
+        alpha = 0.18,
+        color = box_df$box_color,
+        linewidth = 0.7
       )
   }
+  
   
   # links
   if (nrow(links) > 0) {
@@ -430,7 +457,7 @@ p1 <- make_pair_plot(
   bacterial_id = pairs$bacterial_fragment_id[1],
   phold_df = phold,
   blast_df = blast,
-  proph_tbl = proph_tbl,
+  virus_sum_tbl = virus_sum,
   crop_pad = 10000
 )
 
@@ -473,7 +500,7 @@ plots <- purrr::pmap(
       bacterial_id = bact,
       phold_df = phold,
       blast_df = blast,
-      proph_tbl = proph_tbl,
+      virus_sum_tbl = virus_sum,
       title_txt = proph,
       min_align_len = MIN_ALIGN_LEN,
       min_pid = MIN_PID,
@@ -500,8 +527,8 @@ final <- cowplot::plot_grid(
 
 #final <- cowplot::plot_grid(plotlist = plots, ncol = N_COL, align = "hv")
 
-WIDTH <- 18
-HEIGTH <- 14
+WIDTH <- 18 #18
+HEIGTH <- 12 #14
 
 ggsave(OUT_PNG, final, width = WIDTH, height = HEIGTH, dpi = 600)
 
