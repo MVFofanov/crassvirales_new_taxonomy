@@ -56,13 +56,26 @@ BOX_COLORS <- c(
 )
 
 GENE_LABEL_LEGEND <- tibble::tribble(
-  ~label, ~meaning,
-  "t",    "Terminase (large subunit)",
-  "i",    "Integrase",
-  "p",    "DNA polymerase",
-  "h",    "DNA helicase",
-  "*",    "tRNA"
-)
+  ~meaning,                      ~sym,
+  "Terminase large subunit",   "t",
+  "Integrase",                   "i",
+  "transposase",                 "+",
+  "DNA polymerase",              "p",
+  "DNA helicase",                "h",
+  "tRNA",                        "*"
+) %>%
+  mutate(
+    shape = case_when(
+      sym == "*" ~ 8,   # star
+      TRUE ~ 3          # plus; we'll print letters via override (below)
+    )
+  )
+
+gene_legend_grob <- cowplot::ggdraw() +
+  cowplot::draw_label(
+    "t = Terminase large subunit    i = Integrase   + = Transposase    p = DNA polymerase    h = DNA helicase    * = tRNA",
+    x = 0, hjust = 0, size = 16
+  )
 
 # ------------------ READ INPUTS ------------------
 
@@ -305,6 +318,7 @@ extract_gene_labels <- function(genes_df) {
         # existing
         str_detect(product_lc, "terminase large subunit") ~ "t",
         str_detect(product_lc, "\\bintegrase\\b") ~ "i",
+        str_detect(product_lc, "transposase") ~ "+",
         
         # NEW
         str_detect(product_lc, "dna polymerase") ~ "p",
@@ -713,31 +727,21 @@ make_pair_plot <- function(prophage_id, bacterial_id,
     ) +
     coord_cartesian(clip = "off")
   
-  # --- Gene label legend (dummy, legend only) ---
+  # # --- Gene label legend (no colors; just a key with letters) ---
+  # GENE_LABEL_LEGEND2 <- GENE_LABEL_LEGEND %>%
+  #   mutate(label = paste0(sym, "  =  ", meaning))
+  # 
   # p <- p +
-  #   geom_text(
-  #     data = GENE_LABEL_LEGEND,
-  #     aes(
-  #       x = Inf,
-  #       y = Inf,
-  #       label = label,
-  #       color = meaning
-  #     ),
+  #   geom_point(
+  #     data = GENE_LABEL_LEGEND2,
+  #     aes(x = Inf, y = Inf, shape = label),
   #     inherit.aes = FALSE,
-  #     size = 4,
+  #     alpha = 0,
   #     show.legend = TRUE
   #   ) +
-  #   scale_color_manual(
-  #     name = "Gene / feature labels",
-  #     values = c(
-  #       "Terminase (large subunit)" = "black",
-  #       "Integrase"                 = "black",
-  #       "DNA polymerase"            = "black",
-  #       "DNA helicase"              = "black",
-  #       "tRNA"                      = "black"
-  #     )
-  #   )
-  
+  #   scale_shape_discrete(name = "Gene / feature labels") +
+  #   guides(shape = guide_legend(override.aes = list(alpha = 1, size = 4)))
+  # 
   
   gene_labels <- extract_gene_labels(genes)
   
@@ -915,8 +919,9 @@ main_grid <- cowplot::plot_grid(
 final <- cowplot::plot_grid(
   main_grid,
   legend_g,
+  gene_legend_grob,
   ncol = 1,
-  rel_heights = c(1, 0.12)   # tune legend height (e.g. 0.10–0.20)
+  rel_heights = c(1, 0.12, 0.05)   # tune legend height (e.g. 0.10–0.20)
 )
 
 
