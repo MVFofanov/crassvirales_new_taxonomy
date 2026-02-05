@@ -37,13 +37,18 @@ WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/mafft_iq
 #   file.path(WD, "TerL_smart-gap.treefile")
 # )
 
+# tree_files <- c(
+#   file.path(WD, "TerL_gappy0.5.treefile"),
+#   file.path(WD, "TerL_gappy0.6.treefile"),
+#   file.path(WD, "TerL_gappy0.7.treefile"),
+#   file.path(WD, "TerL_gappy0.8.treefile"),
+#   file.path(WD, "TerL_gappy0.9.treefile"),
+#   file.path(WD, "TerL_kpic.treefile"),
+#   file.path(WD, "TerL_smart-gap.treefile")
+# )
+
 tree_files <- c(
-  file.path(WD, "TerL_gappy0.5.treefile"),
-  file.path(WD, "TerL_gappy0.6.treefile"),
-  file.path(WD, "TerL_gappy0.7.treefile"),
-  file.path(WD, "TerL_gappy0.8.treefile"),
-  file.path(WD, "TerL_gappy0.9.treefile"),
-  file.path(WD, "TerL_kpic.treefile")
+  file.path(WD, "TerL_gappy0.8.treefile")
 )
 
 # annot_file <- file.path(WD, "TerL_tree_protein_taxonomy.tsv")
@@ -56,9 +61,11 @@ tree_files <- c(
 # ---- User options ----
 # SHOW_TIP_LABELS <- TRUE   # set to FALSE to hide tip labels
 SHOW_CRASS_LABELS <- FALSE
-SHOW_PROPHAGE_LABELS  <- TRUE   # <- NEW FLAG
+SHOW_PROPHAGE_LABELS  <- FALSE   # <- NEW FLAG
 ROOT_AT_OUTGROUP <- TRUE
 ROOT_AT_CRASS_MRCA <- FALSE   # root at MRCA of all Crassvirales tips
+
+SHOW_CRASS_MRCA_NODE <- TRUE
 
 # ---- Color scheme for viral families + outgroup ----
 CRASSVIRALES_COLOR_SCHEME <- c(
@@ -276,6 +283,8 @@ for (tree_file in tree_files) {
     tree <- ape::root(tree, node = crass_mrca, resolve.root = TRUE)
     tree <- ape::reorder.phylo(tree, order = "cladewise")
   }
+  
+  
   
   # ---- Bacterial annotation ----
   bact_annot_raw <- read_tsv(bact_annot_file, show_col_types = FALSE)
