@@ -23,7 +23,7 @@ OUT_PDF <- file.path(WD, "prophage_vs_bacterial_2x8.pdf")
 
 DEBUG_ONE <- file.path(WD, "debug_one_panel.png")
 
-N_COL <- 2
+N_COL <- 2 # 2
 
 MIN_ALIGN_LEN <- 200
 MIN_PID <- 0
@@ -53,6 +53,15 @@ FUNC_COLORS <- c(
 BOX_COLORS <- c(
   "Crassvirales" = "#ff7f00",
   "Other"        = "#FFA500"
+)
+
+GENE_LABEL_LEGEND <- tibble::tribble(
+  ~label, ~meaning,
+  "t",    "Terminase (large subunit)",
+  "i",    "Integrase",
+  "p",    "DNA polymerase",
+  "h",    "DNA helicase",
+  "*",    "tRNA"
 )
 
 # ------------------ READ INPUTS ------------------
@@ -293,8 +302,15 @@ extract_gene_labels <- function(genes_df) {
     mutate(
       product_lc = tolower(product),
       label = case_when(
+        # existing
         str_detect(product_lc, "terminase large subunit") ~ "t",
         str_detect(product_lc, "\\bintegrase\\b") ~ "i",
+        
+        # NEW
+        str_detect(product_lc, "dna polymerase") ~ "p",
+        str_detect(product_lc, "dna helicase")  ~ "h",
+        str_detect(product_lc, "major head protein")  ~ "m",
+        
         TRUE ~ NA_character_
       ),
       x = (start + end) / 2
@@ -302,6 +318,7 @@ extract_gene_labels <- function(genes_df) {
     filter(!is.na(label)) %>%
     select(seq_id, start, end, strand, product, label, x)
 }
+
 
 crop_shift_trna <- function(trna_df, prophage_id, bacterial_id, crop_win) {
   if (is.null(trna_df) || nrow(trna_df) == 0) return(trna_df)
@@ -395,6 +412,8 @@ make_pair_plot <- function(prophage_id, bacterial_id,
                            phold_df, blast_df, virus_sum_tbl, trna_df, tax_tbl,
                            prophage_taxonomy = NA_character_,
                            bacterial_taxonomy = NA_character_,
+                           prophage_is_mag = NA_character_,
+                           bacterial_is_mag = NA_character_,
                            title_txt = NULL,
                            min_align_len = 200,
                            min_pid = 0,
@@ -618,9 +637,52 @@ make_pair_plot <- function(prophage_id, bacterial_id,
       data = tax_df,
       aes(x = x_lab, y = y_lab, label = tax, vjust = vjust),
       inherit.aes = FALSE,
-      size = 2.4,
+      size = 2.8, #2.8
       hjust = 1   # <-- right-align so it extends LEFT, not outside
     )
+  
+  # --- mid-panel MAG/isolate labels (centered) ---
+  seq_y <- p %>% pull_seqs() %>% distinct(seq_id, y)
+  top_y <- max(seq_y$y)
+  off   <- 2
+  
+  # use same x_max you already compute for taxonomy
+  x_max <- max(
+    seqs$length,
+    genes$end,
+    if (nrow(links) > 0) max(c(links$end, links$end2), na.rm = TRUE) else 0,
+    na.rm = TRUE
+  )
+  
+  x_mid <- x_max * 0.50  # center of the panel (tune if you want)
+  
+  mag_df <- seq_y %>%
+    mutate(
+      mag = case_when(
+        seq_id == prophage_id  ~ as.character(prophage_is_mag),
+        seq_id == bacterial_id ~ as.character(bacterial_is_mag),
+        TRUE ~ NA_character_
+      ),
+      mag = if_else(is.na(mag) | mag == "", NA_character_, mag),
+      is_top = (y == top_y),
+      y_lab  = if_else(is_top, y + off, y - off),
+      vjust  = if_else(is_top, 1, 0),
+      x_lab  = x_mid
+    ) %>%
+    filter(!is.na(mag))
+  
+  if (nrow(mag_df) > 0) {
+    p <- p +
+      geom_text(
+        data = mag_df,
+        aes(x = x_lab, y = y_lab, label = mag, vjust = vjust),
+        inherit.aes = FALSE,
+        size = 2.6,
+        hjust = 0.5,       # centered text
+        fontface = "bold"  # optional, makes it easier to see
+      )
+  }
+  
   
   
   
@@ -638,14 +700,44 @@ make_pair_plot <- function(prophage_id, bacterial_id,
       drop = FALSE,
       name = "PHOLD function"
     ) +
-    labs(title = title_txt) +
+    labs(title = title_txt,
+         x = "Position (bp)") +
     theme_bw(base_size = 10) +
     theme(
       plot.title = element_text(size = 14, face = "bold"),
       panel.grid = element_blank(),
-      axis.title = element_blank()
+      axis.title = element_blank(),
+      axis.text.x  = element_text(size = 14),   # tick labels
+      axis.title.x = element_text(size = 14),    # if you ever show the title
+      axis.ticks.x = element_line(linewidth = 0.6)
     ) +
     coord_cartesian(clip = "off")
+  
+  # --- Gene label legend (dummy, legend only) ---
+  # p <- p +
+  #   geom_text(
+  #     data = GENE_LABEL_LEGEND,
+  #     aes(
+  #       x = Inf,
+  #       y = Inf,
+  #       label = label,
+  #       color = meaning
+  #     ),
+  #     inherit.aes = FALSE,
+  #     size = 4,
+  #     show.legend = TRUE
+  #   ) +
+  #   scale_color_manual(
+  #     name = "Gene / feature labels",
+  #     values = c(
+  #       "Terminase (large subunit)" = "black",
+  #       "Integrase"                 = "black",
+  #       "DNA polymerase"            = "black",
+  #       "DNA helicase"              = "black",
+  #       "tRNA"                      = "black"
+  #     )
+  #   )
+  
   
   gene_labels <- extract_gene_labels(genes)
   
@@ -748,9 +840,11 @@ plots <- purrr::pmap(
     pairs_ordered$prophage_fragment_id,
     pairs_ordered$bacterial_fragment_id,
     pairs_ordered$prophage_taxonomy,
-    pairs_ordered$bacterial_taxonomy
+    pairs_ordered$bacterial_taxonomy,
+    pairs_ordered$prophage_is_mag,
+    pairs_ordered$bacterial_is_mag
   ),
-  function(proph, bact, proph_tax, bact_tax) {
+  function(proph, bact, proph_tax, bact_tax, proph_mag, bact_mag) {
     make_pair_plot(
       prophage_id  = proph,
       bacterial_id = bact,
@@ -758,9 +852,11 @@ plots <- purrr::pmap(
       blast_df = blast,
       virus_sum_tbl = virus_sum,
       trna_df = trna,
-      tax_tbl = tax_tbl,   # <- your function signature includes this
+      tax_tbl = tax_tbl,
       prophage_taxonomy = proph_tax,
       bacterial_taxonomy = bact_tax,
+      prophage_is_mag = proph_mag,
+      bacterial_is_mag = bact_mag,
       title_txt = proph,
       min_align_len = MIN_ALIGN_LEN,
       min_pid = MIN_PID,
@@ -773,24 +869,59 @@ plots <- purrr::pmap(
 
 
 
-legend_plot <- plots[[1]] + theme(legend.position = "right")
-legend_g <- cowplot::get_legend(legend_plot)
 
+legend_plot <- plots[[1]] + theme(legend.position = "right")
+# --- get ONE legend from the first plot ---
+legend_g <- cowplot::get_legend(
+  plots[[1]] +
+    theme(
+      legend.position = "bottom",
+      legend.box = "vertical",
+      
+      # --- text sizes ---
+      legend.title = element_text(size = 18, face = "bold"),
+      legend.text  = element_text(size = 16),
+      
+      # --- make the colored boxes bigger ---
+      legend.key.size = unit(6, "mm"),
+      
+      # optional: more spacing
+      legend.spacing.x = unit(4, "mm"),
+      legend.spacing.y = unit(2, "mm")
+    ) +
+    guides(
+      # optional: bigger colorbar
+      color = guide_colorbar(
+        barheight = unit(5, "mm"),
+        barwidth  = unit(60, "mm"),
+        title.position = "top"
+      ),
+      # optional: arrange PHOLD categories into multiple rows
+      fill = guide_legend(nrow = 2, byrow = TRUE)
+    )
+)
+
+# --- remove legends from panels ---
 plots_nolegend <- purrr::map(plots, ~ .x + theme(legend.position = "none"))
 
-main_grid <- cowplot::plot_grid(plotlist = plots_nolegend, ncol = N_COL, align = "hv")
+# --- main grid of panels ---
+main_grid <- cowplot::plot_grid(
+  plotlist = plots_nolegend,
+  ncol = N_COL,
+  align = "hv"
+)
 
+# --- combine: grid + legend at bottom ---
 final <- cowplot::plot_grid(
   main_grid,
   legend_g,
-  ncol = 2,
-  rel_widths = c(1, 0.18)   # подстрой ширину легенды
+  ncol = 1,
+  rel_heights = c(1, 0.12)   # tune legend height (e.g. 0.10–0.20)
 )
 
-#final <- cowplot::plot_grid(plotlist = plots, ncol = N_COL, align = "hv")
 
 WIDTH <- 18 #18
-HEIGTH <- 12 #14
+HEIGTH <- 20 #14
 
 ggsave(OUT_PNG, final, width = WIDTH, height = HEIGTH, dpi = 600)
 
