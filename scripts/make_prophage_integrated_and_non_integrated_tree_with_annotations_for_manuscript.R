@@ -70,12 +70,12 @@ CRASSVIRALES_COLOR_SCHEME <- c(
 )
 
 CRASS_CLADE_FILL <- c(
-  "Intestiviridae" = scales::alpha("#EE3B3B", 0.18),
-  "Crevaviridae"   = scales::alpha("#EE9A00", 0.18),
-  "Suoliviridae"   = scales::alpha("#4169E1", 0.18),
-  "Steigviridae"   = scales::alpha("#00CED1", 0.18),
-  "Epsilon"        = scales::alpha("#CD2990", 0.18),
-  "Zeta"           = scales::alpha("#006400", 0.18)
+  "Intestiviridae" = scales::alpha("#EE3B3B", 0.2),
+  "Crevaviridae"   = scales::alpha("#EE9A00", 0.2),
+  "Suoliviridae"   = scales::alpha("#4169E1", 0.2),
+  "Steigviridae"   = scales::alpha("#00CED1", 0.2),
+  "Epsilon"        = scales::alpha("#CD2990", 0.2),
+  "Zeta"           = scales::alpha("#006400", 0.2)
 )
 
 crass_families <- setdiff(names(CRASSVIRALES_COLOR_SCHEME), c("Outgroup", "Other"))
@@ -542,7 +542,7 @@ for (tree_file in TREE_FILES) {
         data = genomad_label_df,
         aes(x = x, y = y, label = label),
         inherit.aes = FALSE,
-        size = 2,
+        size = 1,
         vjust = -0.2,
         angle = 45,
         colour = "grey30"
@@ -628,7 +628,7 @@ for (tree_file in TREE_FILES) {
         data = ratio_label_df,
         aes(x = x, y = y, label = label),
         inherit.aes = FALSE,
-        size = 2,
+        size = 1,
         vjust = -0.2,
         angle = 45,
         colour = "grey30"
