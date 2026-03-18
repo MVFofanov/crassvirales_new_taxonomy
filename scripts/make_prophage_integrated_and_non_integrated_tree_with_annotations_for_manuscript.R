@@ -42,6 +42,12 @@ GENOMAD_TO_RATIO_GAP <- 0.03
 RATIO_TO_DOT_GAP <- 0.03
 TEXT_EXTRA_GAP <- 0.03
 
+PHYLUM_RING_WIDTH <- 0.025
+CLASS_RING_WIDTH  <- 0.025
+TREE_TO_PHYLUM_GAP <- 0.02
+PHYLUM_TO_CLASS_GAP <- 0.015
+CLASS_TO_GENOMAD_GAP <- 0.02
+
 GENOMAD_DIV <- 500000
 RATIO_MULT  <- 0.3
 DOT_SIZE    <- 0.4
@@ -76,6 +82,29 @@ CRASS_CLADE_FILL <- c(
   "Steigviridae"   = scales::alpha("#00CED1", 0.2),
   "Epsilon"        = scales::alpha("#CD2990", 0.2),
   "Zeta"           = scales::alpha("#006400", 0.2)
+)
+
+# ---- Phylum color scheme ----
+PHYLUM_COLORS <- c(
+  "Bacteroidota"   = "#33a02c",
+  "Bacillota"      = "#1f78b4",
+  "Pseudomonadota" = "#ff7f00",
+  "Bacteria"       = "gold",
+  "Other"          = "grey70"
+)
+
+# ---- Class color scheme ----
+CLASS_COLORS <- c(
+  "Flavobacteriia"      = "#b2df8a",
+  "Bacteroidia"         = "#a6cee3",
+  "Cytophagia"          = "#ffff99",
+  "Saprospiria"         = "#cab2d6",
+  "Chitinophagia"       = "#6a3d9a",
+  "Clostridia"          = "#b15928",
+  "Alphaproteobacteria" = "#E31A1C",
+  "Gammaproteobacteria" = "#FB9A99",
+  "Betaproteobacteria"  = "#fdbf6f",
+  "Other"               = "grey70"
 )
 
 crass_families <- setdiff(names(CRASSVIRALES_COLOR_SCHEME), c("Outgroup", "Other"))
@@ -308,7 +337,6 @@ for (tree_file in TREE_FILES) {
     filter(genome_id %in% outgroup_genomes) %>%
     pull(label)
   
-  bact_annot_raw <- read_tsv(BACT_ANNOT_FILE, show_col_types = FALSE)
   bact_annot <- bact_annot_raw %>%
     rename(label = leaf_label) %>%
     rename_with(~ ifelse(startsWith(.x, "bact_"), .x, paste0("bact_", .x)), -label)
@@ -346,6 +374,20 @@ for (tree_file in TREE_FILES) {
         sample_origin == "isolate" ~ "isolate",
         sample_origin == "MAG"     ~ "MAG",
         TRUE                       ~ NA_character_
+      )
+    )
+  
+  annot_all <- annot_all %>%
+    mutate(
+      bact_phylum2 = case_when(
+        is.na(bact_phylum) ~ NA_character_,
+        bact_phylum %in% names(PHYLUM_COLORS) ~ bact_phylum,
+        TRUE ~ "Other"
+      ),
+      bact_class2 = case_when(
+        is.na(bact_class) ~ NA_character_,
+        bact_class %in% names(CLASS_COLORS) ~ bact_class,
+        TRUE ~ "Other"
       )
     )
   
@@ -482,9 +524,88 @@ for (tree_file in TREE_FILES) {
     }
     
     # ---- Prophage length bars for fan tree ----
+    # ---- Outer annotation rings ----
     tree_outer_r <- max(p_bare$data$x, na.rm = TRUE)
     
-    genomad_base_r <- tree_outer_r + TREE_TO_GENOMAD_GAP
+    # ---- Phylum ring ----
+    phylum_base_r <- tree_outer_r + TREE_TO_PHYLUM_GAP
+    
+    phylum_ring_df <- p_bare$data %>%
+      dplyr::filter(
+        isTip,
+        is_prophage,
+        !is.na(bact_phylum2),
+        !is.na(y)
+      ) %>%
+      dplyr::mutate(
+        phyl_x    = phylum_base_r,
+        phyl_xend = phylum_base_r + PHYLUM_RING_WIDTH
+      )
+    
+    # ---- Class ring ----
+    class_base_r <- phylum_base_r + PHYLUM_RING_WIDTH + PHYLUM_TO_CLASS_GAP
+    
+    class_ring_df <- p_bare$data %>%
+      dplyr::filter(
+        isTip,
+        is_prophage,
+        !is.na(bact_class2),
+        !is.na(y)
+      ) %>%
+      dplyr::mutate(
+        class_x    = class_base_r,
+        class_xend = class_base_r + CLASS_RING_WIDTH
+      )
+    
+    # ---- Prophage length ring ----
+    genomad_base_r <- class_base_r + CLASS_RING_WIDTH + CLASS_TO_GENOMAD_GAP
+    genomad_div    <- GENOMAD_DIV
+    
+    p_bare <- p_bare +
+      # ---- Phylum ring ----
+    ggnewscale::new_scale_color() +
+      geom_segment(
+        data = phylum_ring_df,
+        aes(
+          x = phyl_x,
+          xend = phyl_xend,
+          y = y,
+          yend = y,
+          colour = bact_phylum2
+        ),
+        linewidth = 0.5,
+        lineend = "butt",
+        inherit.aes = FALSE,
+        show.legend = FALSE
+      ) +
+      scale_color_manual(
+        values = PHYLUM_COLORS,
+        na.value = PHYLUM_COLORS["Other"]
+      ) +
+      
+      # ---- Class ring ----
+    ggnewscale::new_scale_color() +
+      geom_segment(
+        data = class_ring_df,
+        aes(
+          x = class_x,
+          xend = class_xend,
+          y = y,
+          yend = y,
+          colour = bact_class2
+        ),
+        linewidth = 0.5,
+        lineend = "butt",
+        inherit.aes = FALSE,
+        show.legend = FALSE
+      ) +
+      scale_color_manual(
+        values = CLASS_COLORS,
+        na.value = CLASS_COLORS["Other"]
+      )
+    
+    # ---- Prophage length ring starts after class ring ----
+    genomad_base_r <- class_base_r + CLASS_RING_WIDTH + CLASS_TO_GENOMAD_GAP
     genomad_div    <- GENOMAD_DIV
     
     # ---- Dotted reference lines for prophage length ----
@@ -654,6 +775,49 @@ for (tree_file in TREE_FILES) {
         )
       )
     
+    p_bare <- p_bare +
+      # ---- Phylum ring ----
+    ggnewscale::new_scale_color() +
+      geom_segment(
+        data = phylum_ring_df,
+        aes(
+          x = phyl_x,
+          xend = phyl_xend,
+          y = y,
+          yend = y,
+          colour = bact_phylum2
+        ),
+        linewidth = 0.5,
+        lineend = "butt",
+        inherit.aes = FALSE,
+        show.legend = FALSE
+      ) +
+      scale_color_manual(
+        values = PHYLUM_COLORS,
+        na.value = PHYLUM_COLORS["Other"]
+      ) +
+      
+      # ---- Class ring ----
+    ggnewscale::new_scale_color() +
+      geom_segment(
+        data = class_ring_df,
+        aes(
+          x = class_x,
+          xend = class_xend,
+          y = y,
+          yend = y,
+          colour = bact_class2
+        ),
+        linewidth = 0.5,
+        lineend = "butt",
+        inherit.aes = FALSE,
+        show.legend = FALSE
+      ) +
+      scale_color_manual(
+        values = CLASS_COLORS,
+        na.value = CLASS_COLORS["Other"]
+      )
+    
     # ---- Dot layer: integration + source ----
     ratio_outer_r <- max(ratio_df$ratio_xend, na.rm = TRUE)
     
@@ -671,6 +835,8 @@ for (tree_file in TREE_FILES) {
     outer_limit <- max(
       c(
         p_bare$data$x,
+        phylum_ring_df$phyl_xend,
+        class_ring_df$class_xend,
         genomad_ring_df$geno_xend,
         ratio_df$ratio_xend,
         dot_df$dot_x
@@ -712,6 +878,8 @@ for (tree_file in TREE_FILES) {
     outer_limit <- max(
       c(
         p_bare$data$x,
+        phylum_ring_df$phyl_xend,
+        class_ring_df$class_xend,
         genomad_ring_df$geno_xend,
         ratio_df$ratio_xend,
         dot_df$dot_x
