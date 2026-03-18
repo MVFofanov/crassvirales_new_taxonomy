@@ -197,7 +197,7 @@ source_df <- read_tsv(SOURCE_FILE, show_col_types = FALSE) %>%
 cat("[INFO] source_df rows:", nrow(source_df), "\n")
 
 # ---- Build mapping: accession -> prophage_label ----
-PAIRS_TSV <- file.path(WD, "pairs_prophage_with_flanks_vs_bacterial.tsv")
+#PAIRS_TSV <- file.path(WD, "pairs_prophage_with_flanks_vs_bacterial.tsv")
 
 pairs <- readr::read_tsv(PAIRS_TSV, show_col_types = FALSE) %>%
   transmute(
@@ -242,7 +242,7 @@ for (tree_file in TREE_FILES) {
     filter(genome_id %in% outgroup_genomes) %>%
     pull(label)
   
-  bact_annot_raw <- read_tsv(bact_annot_file, show_col_types = FALSE)
+  bact_annot_raw <- read_tsv(BACT_ANNOT_FILE, show_col_types = FALSE)
   bact_annot <- bact_annot_raw %>%
     rename(label = leaf_label) %>%
     rename_with(~ ifelse(startsWith(.x, "bact_"), .x, paste0("bact_", .x)), -label)
@@ -387,13 +387,16 @@ for (tree_file in TREE_FILES) {
         nudge_x = 0.02
       ) +
       theme_tree() +
-      theme(legend.position = "none")
+      theme(
+        legend.position = "none",
+        plot.margin = margin(20, 80, 20, 20)
+      )
     
     # ---- Prophage length bars for fan tree ----
-    max_x <- max(p_bare$data$x, na.rm = TRUE)
+    tree_outer_r <- max(p_bare$data$x, na.rm = TRUE)
     
-    genomad_base_r <- max_x * 1.05
-    genomad_div    <- 500000   # controls bar length; decrease for longer bars
+    genomad_base_r <- tree_outer_r + TREE_TO_GENOMAD_GAP
+    genomad_div    <- GENOMAD_DIV
     
     # ---- Dotted reference lines for prophage length ----
     genomad_levels <- c(50000, 100000, 150000)
@@ -480,7 +483,9 @@ for (tree_file in TREE_FILES) {
     # Prophage ratio annotation
     
     # ---- Prophage ratio annotation ----
-    ratio_base_r <- max_x * 1.09
+    genomad_outer_r <- max(genomad_ring_df$geno_xend, na.rm = TRUE)
+    
+    ratio_base_r <- genomad_outer_r + GENOMAD_TO_RATIO_GAP
     
     ratio_df <- p_bare$data %>%
       dplyr::filter(
@@ -517,6 +522,8 @@ for (tree_file in TREE_FILES) {
       )
     
     # ---- Dot layer: integration + source ----
+    ratio_outer_r <- max(ratio_df$ratio_xend, na.rm = TRUE)
+    
     dot_df <- p_bare$data %>%
       dplyr::filter(
         isTip,
@@ -524,9 +531,21 @@ for (tree_file in TREE_FILES) {
         !is.na(integration_status)
       ) %>%
       dplyr::mutate(
-        dot_x = max(p_bare$data$x, na.rm = TRUE) * 1.12,
+        dot_x = ratio_outer_r + RATIO_TO_DOT_GAP,
         dot_fill = if_else(source_type == "isolate", integration_status, "white")
       )
+    
+    outer_limit <- max(
+      c(
+        p_bare$data$x,
+        genomad_ring_df$geno_xend,
+        ratio_df$ratio_xend,
+        dot_df$dot_x
+      ),
+      na.rm = TRUE
+    )
+    
+    p_bare <- p_bare + xlim(NA, outer_limit + 0.05)
     
     p_bare <- p_bare +
       ggnewscale::new_scale_color() +
@@ -557,6 +576,19 @@ for (tree_file in TREE_FILES) {
         )
       )
     
+    outer_limit <- max(
+      c(
+        p_bare$data$x,
+        genomad_ring_df$geno_xend,
+        ratio_df$ratio_xend,
+        dot_df$dot_x
+      ),
+      na.rm = TRUE
+    )
+    
+    p_bare <- p_bare + xlim(NA, outer_limit + 0.05)
+    
+    
     cat("[DEBUG] With source info:",
         sum(!is.na(annot_all$source_type)), "\n")
     
@@ -568,8 +600,8 @@ for (tree_file in TREE_FILES) {
     ggsave(
       out_png,
       p_bare,
-      width = 12,
-      height = 12,
+      width = 20,
+      height = 20,
       units = "cm",
       dpi = 1200
     )
