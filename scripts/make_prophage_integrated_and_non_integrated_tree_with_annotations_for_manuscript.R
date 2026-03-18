@@ -48,7 +48,6 @@ DOT_SIZE    <- 0.4
 DOT_STROKE  <- 0.15
 
 GENOMAD_LEVELS <- c(50000, 100000, 150000)
-GENOMAD_DIV <- 500000
 
 RATIO_LEVELS <- c(0.25, 0.50, 0.75, 1.00)
 RATIO_MULT <- max(GENOMAD_LEVELS) / GENOMAD_DIV
@@ -68,6 +67,15 @@ CRASSVIRALES_COLOR_SCHEME <- c(
   "Zeta"           = "#006400",
   "Outgroup"       = "violet",
   "Other"          = "grey60"
+)
+
+CRASS_CLADE_FILL <- c(
+  "Intestiviridae" = scales::alpha("#EE3B3B", 0.18),
+  "Crevaviridae"   = scales::alpha("#EE9A00", 0.18),
+  "Suoliviridae"   = scales::alpha("#4169E1", 0.18),
+  "Steigviridae"   = scales::alpha("#00CED1", 0.18),
+  "Epsilon"        = scales::alpha("#CD2990", 0.18),
+  "Zeta"           = scales::alpha("#006400", 0.18)
 )
 
 crass_families <- setdiff(names(CRASSVIRALES_COLOR_SCHEME), c("Outgroup", "Other"))
@@ -108,6 +116,58 @@ prophage_fragment_to_accession <- function(x) {
     stringr::str_replace("_[0-9]+-[0-9]+$", "") %>%
     stringr::str_replace("\\r$", "") %>%
     stringr::str_trim()
+}
+
+find_family_pure_clades <- function(tree, annot_all, crass_families) {
+  Ntip <- length(tree$tip.label)
+  internal_nodes <- (Ntip + 1):(Ntip + tree$Nnode)
+  
+  node_info <- lapply(internal_nodes, function(node) {
+    tip_ids <- get_tip_descendants(tree, node)
+    tip_labels <- tree$tip.label[tip_ids]
+    
+    desc_df <- annot_all %>%
+      dplyr::filter(label %in% tip_labels)
+    
+    crass_desc <- desc_df %>%
+      dplyr::filter(family %in% crass_families)
+    
+    fams <- sort(unique(crass_desc$family))
+    
+    tibble(
+      node = node,
+      n_tips = length(tip_labels),
+      n_crass = nrow(crass_desc),
+      family = if (length(fams) == 1) fams else NA_character_,
+      is_pure = length(fams) == 1 && nrow(crass_desc) > 0
+    )
+  }) %>%
+    dplyr::bind_rows()
+  
+  pure_nodes <- node_info %>%
+    dplyr::filter(is_pure)
+  
+  if (nrow(pure_nodes) == 0) {
+    return(tibble(node = integer(), family = character(), n_tips = integer()))
+  }
+  
+  # keep only maximal pure clades:
+  # remove a node if its parent has the same pure family
+  pure_nodes$parent <- vapply(pure_nodes$node, function(n) get_parent_node(tree, n), integer(1))
+  
+  parent_family_map <- pure_nodes %>%
+    dplyr::select(node, family) %>%
+    tibble::deframe()
+  
+  pure_nodes <- pure_nodes %>%
+    dplyr::mutate(
+      parent_family = unname(parent_family_map[as.character(parent)]),
+      keep = is.na(parent_family) | parent_family != family
+    ) %>%
+    dplyr::filter(keep) %>%
+    dplyr::select(node, family, n_tips, n_crass)
+  
+  pure_nodes
 }
 
 root_tree_by_mode <- function(tree, mode,
@@ -306,6 +366,14 @@ for (tree_file in TREE_FILES) {
       stem = stem
     )
     
+    family_pure_clades <- find_family_pure_clades(
+      tree = tree,
+      annot_all = annot_all,
+      crass_families = crass_families
+    )
+    
+    print(family_pure_clades)
+    
     # ---- MRCA of all Crassvirales tips ----
     crass_tips <- annot_all %>%
       dplyr::filter(family %in% crass_families) %>%
@@ -380,7 +448,7 @@ for (tree_file in TREE_FILES) {
       scale_color_manual(
         values = CRASSVIRALES_COLOR_SCHEME,
         na.value = CRASSVIRALES_COLOR_SCHEME["Other"]
-      ) +
+      )  +
       geom_point2(
         aes(subset = (node == crass_mrca_node)),
         colour = "black",
@@ -397,6 +465,21 @@ for (tree_file in TREE_FILES) {
         legend.position = "none",
         plot.margin = margin(20, 80, 20, 20)
       )
+    
+    if (nrow(family_pure_clades) > 0) {
+      for (i in seq_len(nrow(family_pure_clades))) {
+        fam <- family_pure_clades$family[i]
+        node <- family_pure_clades$node[i]
+        
+        p_bare <- p_bare +
+          geom_hilight(
+            node = node,
+            fill = CRASS_CLADE_FILL[[fam]],
+            alpha = 0.25,
+            extend = 0.002
+          )
+      }
+    }
     
     # ---- Prophage length bars for fan tree ----
     tree_outer_r <- max(p_bare$data$x, na.rm = TRUE)
