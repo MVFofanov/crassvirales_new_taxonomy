@@ -37,26 +37,26 @@ if (!dir.exists(OUTPUT_DIR)) {
 # =========================================================
 
 # ---- Ring spacing settings ----
+# ---- Ring spacing settings ----
 TREE_TO_GENOMAD_GAP <- 0.03
 GENOMAD_TO_RATIO_GAP <- 0.03
-RATIO_TO_DOT_GAP <- 0.03
+RATIO_TO_PHYLUM_GAP <- 0.03
+PHYLUM_TO_CLASS_GAP <- 0.02
+CLASS_TO_DOT_GAP <- 0.03
 TEXT_EXTRA_GAP <- 0.03
 
-PHYLUM_RING_WIDTH <- 0.025
-CLASS_RING_WIDTH  <- 0.025
-TREE_TO_PHYLUM_GAP <- 0.02
-PHYLUM_TO_CLASS_GAP <- 0.015
-CLASS_TO_GENOMAD_GAP <- 0.02
-
 GENOMAD_DIV <- 500000
-RATIO_MULT  <- 0.3
-DOT_SIZE    <- 0.4
-DOT_STROKE  <- 0.15
-
 GENOMAD_LEVELS <- c(50000, 100000, 150000)
 
 RATIO_LEVELS <- c(0.25, 0.50, 0.75, 1.00)
 RATIO_MULT <- max(GENOMAD_LEVELS) / GENOMAD_DIV
+
+# 50% of max prophage-size bar width (= 0.3 / 2 = 0.15)
+PHYLUM_RING_WIDTH <- 0.15
+CLASS_RING_WIDTH  <- 0.15
+
+DOT_SIZE    <- 0.4
+DOT_STROKE  <- 0.15
 
 ROOTING_MODES <- c(
   "outgroup",
@@ -525,84 +525,11 @@ for (tree_file in TREE_FILES) {
     
     # ---- Prophage length bars for fan tree ----
     # ---- Outer annotation rings ----
+    # ---- Prophage length bars for fan tree ----
     tree_outer_r <- max(p_bare$data$x, na.rm = TRUE)
     
-    # ---- Phylum ring ----
-    phylum_base_r <- tree_outer_r + TREE_TO_PHYLUM_GAP
-    
-    phylum_ring_df <- p_bare$data %>%
-      dplyr::filter(
-        isTip,
-        is_prophage,
-        !is.na(bact_phylum2),
-        !is.na(y)
-      ) %>%
-      dplyr::mutate(
-        phyl_x    = phylum_base_r,
-        phyl_xend = phylum_base_r + PHYLUM_RING_WIDTH
-      )
-    
-    # ---- Class ring ----
-    class_base_r <- phylum_base_r + PHYLUM_RING_WIDTH + PHYLUM_TO_CLASS_GAP
-    
-    class_ring_df <- p_bare$data %>%
-      dplyr::filter(
-        isTip,
-        is_prophage,
-        !is.na(bact_class2),
-        !is.na(y)
-      ) %>%
-      dplyr::mutate(
-        class_x    = class_base_r,
-        class_xend = class_base_r + CLASS_RING_WIDTH
-      )
-    
-    # ---- Prophage length ring ----
-    genomad_base_r <- class_base_r + CLASS_RING_WIDTH + CLASS_TO_GENOMAD_GAP
+    genomad_base_r <- tree_outer_r + TREE_TO_GENOMAD_GAP
     genomad_div    <- GENOMAD_DIV
-    
-    p_bare <- p_bare +
-      # ---- Phylum ring ----
-    ggnewscale::new_scale_color() +
-      geom_segment(
-        data = phylum_ring_df,
-        aes(
-          x = phyl_x,
-          xend = phyl_xend,
-          y = y,
-          yend = y,
-          colour = bact_phylum2
-        ),
-        linewidth = 0.5,
-        lineend = "butt",
-        inherit.aes = FALSE,
-        show.legend = FALSE
-      ) +
-      scale_color_manual(
-        values = PHYLUM_COLORS,
-        na.value = PHYLUM_COLORS["Other"]
-      ) +
-      
-      # ---- Class ring ----
-    ggnewscale::new_scale_color() +
-      geom_segment(
-        data = class_ring_df,
-        aes(
-          x = class_x,
-          xend = class_xend,
-          y = y,
-          yend = y,
-          colour = bact_class2
-        ),
-        linewidth = 0.5,
-        lineend = "butt",
-        inherit.aes = FALSE,
-        show.legend = FALSE
-      ) +
-      scale_color_manual(
-        values = CLASS_COLORS,
-        na.value = CLASS_COLORS["Other"]
-      )
     
     # ---- Prophage length ring starts after class ring ----
     genomad_base_r <- class_base_r + CLASS_RING_WIDTH + CLASS_TO_GENOMAD_GAP
@@ -775,6 +702,39 @@ for (tree_file in TREE_FILES) {
         )
       )
     
+    # ---- Dot layer: integration + source ----
+    ratio_outer_r <- max(ratio_df$ratio_xend, na.rm = TRUE)
+    
+    # ---- Phylum ring after ratio ----
+    phylum_base_r <- ratio_outer_r + RATIO_TO_PHYLUM_GAP
+    
+    phylum_ring_df <- p_bare$data %>%
+      dplyr::filter(
+        isTip,
+        is_prophage,
+        !is.na(bact_phylum2),
+        !is.na(y)
+      ) %>%
+      dplyr::mutate(
+        phyl_x    = phylum_base_r,
+        phyl_xend = phylum_base_r + PHYLUM_RING_WIDTH
+      )
+    
+    # ---- Class ring after phylum ----
+    class_base_r <- phylum_base_r + PHYLUM_RING_WIDTH + PHYLUM_TO_CLASS_GAP
+    
+    class_ring_df <- p_bare$data %>%
+      dplyr::filter(
+        isTip,
+        is_prophage,
+        !is.na(bact_class2),
+        !is.na(y)
+      ) %>%
+      dplyr::mutate(
+        class_x    = class_base_r,
+        class_xend = class_base_r + CLASS_RING_WIDTH
+      )
+    
     p_bare <- p_bare +
       # ---- Phylum ring ----
     ggnewscale::new_scale_color() +
@@ -818,8 +778,7 @@ for (tree_file in TREE_FILES) {
         na.value = CLASS_COLORS["Other"]
       )
     
-    # ---- Dot layer: integration + source ----
-    ratio_outer_r <- max(ratio_df$ratio_xend, na.rm = TRUE)
+    class_outer_r <- max(class_ring_df$class_xend, na.rm = TRUE)
     
     dot_df <- p_bare$data %>%
       dplyr::filter(
@@ -828,17 +787,17 @@ for (tree_file in TREE_FILES) {
         !is.na(integration_status)
       ) %>%
       dplyr::mutate(
-        dot_x = ratio_outer_r + RATIO_TO_DOT_GAP,
+        dot_x = class_outer_r + CLASS_TO_DOT_GAP,
         dot_fill = if_else(source_type == "isolate", integration_status, "white")
       )
     
     outer_limit <- max(
       c(
         p_bare$data$x,
-        phylum_ring_df$phyl_xend,
-        class_ring_df$class_xend,
         genomad_ring_df$geno_xend,
         ratio_df$ratio_xend,
+        phylum_ring_df$phyl_xend,
+        class_ring_df$class_xend,
         dot_df$dot_x
       ),
       na.rm = TRUE
