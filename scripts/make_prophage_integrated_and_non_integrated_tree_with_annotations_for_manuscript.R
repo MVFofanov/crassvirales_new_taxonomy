@@ -38,7 +38,7 @@ if (!dir.exists(OUTPUT_DIR)) {
 
 # ---- Ring spacing settings ----
 # ---- Ring spacing settings ----
-TREE_TO_GENOMAD_GAP <- 0.03
+TREE_TO_GENOMAD_GAP <- 0.005 #0.03
 GENOMAD_TO_RATIO_GAP <- 0.03
 RATIO_TO_PHYLUM_GAP <- 0.03
 PHYLUM_TO_CLASS_GAP <- 0.02
@@ -532,7 +532,6 @@ for (tree_file in TREE_FILES) {
     genomad_div    <- GENOMAD_DIV
     
     # ---- Prophage length ring starts after class ring ----
-    genomad_base_r <- class_base_r + CLASS_RING_WIDTH + CLASS_TO_GENOMAD_GAP
     genomad_div    <- GENOMAD_DIV
     
     # ---- Dotted reference lines for prophage length ----
