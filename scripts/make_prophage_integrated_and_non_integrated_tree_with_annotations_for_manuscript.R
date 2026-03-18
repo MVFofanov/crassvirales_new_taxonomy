@@ -43,9 +43,15 @@ RATIO_TO_DOT_GAP <- 0.03
 TEXT_EXTRA_GAP <- 0.03
 
 GENOMAD_DIV <- 500000
-RATIO_MULT  <- 0.03
+RATIO_MULT  <- 0.3
 DOT_SIZE    <- 0.4
 DOT_STROKE  <- 0.15
+
+GENOMAD_LEVELS <- c(50000, 100000, 150000)
+GENOMAD_DIV <- 500000
+
+RATIO_LEVELS <- c(0.25, 0.50, 0.75, 1.00)
+RATIO_MULT <- max(GENOMAD_LEVELS) / GENOMAD_DIV
 
 ROOTING_MODES <- c(
   "outgroup",
@@ -399,7 +405,7 @@ for (tree_file in TREE_FILES) {
     genomad_div    <- GENOMAD_DIV
     
     # ---- Dotted reference lines for prophage length ----
-    genomad_levels <- c(50000, 100000, 150000)
+    genomad_levels <- GENOMAD_LEVELS
     
     genomad_ring_positions <- tibble(
       genomad_len = genomad_levels,
@@ -484,24 +490,66 @@ for (tree_file in TREE_FILES) {
     
     # ---- Prophage ratio annotation ----
     genomad_outer_r <- max(genomad_ring_df$geno_xend, na.rm = TRUE)
-    
     ratio_base_r <- genomad_outer_r + GENOMAD_TO_RATIO_GAP
+    
+    ratio_levels <- RATIO_LEVELS
+    
+    ratio_ring_positions <- tibble(
+      ratio_value = ratio_levels,
+      ring_x      = ratio_base_r + ratio_levels * RATIO_MULT
+    )
+    
+    ratio_ring_segments_df <- ratio_ring_positions %>%
+      mutate(
+        y    = y_range[1],
+        yend = y_range[2]
+      )
+    
+    ratio_label_df <- ratio_ring_positions %>%
+      mutate(
+        y     = y_range[2],
+        label = sprintf("%.2f", ratio_value),
+        x     = ring_x + TEXT_EXTRA_GAP
+      )
     
     ratio_df <- p_bare$data %>%
       dplyr::filter(
         isTip,
         is_prophage,
-        !is.na(bact_prophage_ratio),
+        !is.na(bact_prophage_ratio_num),
         !is.na(y)
       ) %>%
       dplyr::mutate(
-        bact_prophage_ratio_num = suppressWarnings(as.numeric(bact_prophage_ratio)),
+        ratio_group = if_else(
+          !is.na(bact_topology) & bact_topology == "Provirus",
+          "integrated_provirus",
+          "non_integrated_prophage"
+        ),
         ratio_x    = ratio_base_r,
-        ratio_xend = ratio_base_r + bact_prophage_ratio_num * 0.03
+        ratio_xend = ratio_base_r + bact_prophage_ratio_num * RATIO_MULT
       ) %>%
-      dplyr::filter(!is.na(bact_prophage_ratio_num))
+      dplyr::filter(!is.na(ratio_xend))
     
     p_bare <- p_bare +
+      # dotted reference lines for ratio
+      geom_segment(
+        data = ratio_ring_segments_df,
+        aes(x = ring_x, xend = ring_x, y = y, yend = yend),
+        inherit.aes = FALSE,
+        colour = "grey50",
+        linetype = "dotted",
+        linewidth = 0.15,
+        lineend = "round"
+      ) +
+      geom_text(
+        data = ratio_label_df,
+        aes(x = x, y = y, label = label),
+        inherit.aes = FALSE,
+        size = 2,
+        vjust = -0.2,
+        angle = 45,
+        colour = "grey30"
+      ) +
       ggnewscale::new_scale_color() +
       geom_segment(
         data = ratio_df,
@@ -510,15 +558,17 @@ for (tree_file in TREE_FILES) {
           xend = ratio_xend,
           y = y,
           yend = y,
-          color = bact_prophage_ratio_num
+          color = ratio_group
         ),
-        linewidth = 0.3,
-        lineend = "round",
+        linewidth = 0.2,
+        lineend = "butt",
         inherit.aes = FALSE
       ) +
-      scale_color_gradient(
-        low = "lightgrey",
-        high = "black"
+      scale_color_manual(
+        values = c(
+          "integrated_provirus"     = "red",
+          "non_integrated_prophage" = "blue"
+        )
       )
     
     # ---- Dot layer: integration + source ----
