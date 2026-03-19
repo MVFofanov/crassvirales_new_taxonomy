@@ -39,6 +39,15 @@ if (!dir.exists(OUTPUT_DIR)) {
 
 # ---- Ring spacing settings ----
 # ---- Ring spacing settings ----
+BAR_LINEWIDTH <- 0.3
+
+PROPHAGE_LINEWIDTH     <- 0.25
+PROPHAGE_RATIO_LINEWIDTH     <- 0.25
+PHYLUM_LINEWIDTH       <- BAR_LINEWIDTH
+CLASS_LINEWIDTH        <- BAR_LINEWIDTH
+SOURCE_LINEWIDTH       <- BAR_LINEWIDTH
+COMPLETENESS_LINEWIDTH <- BAR_LINEWIDTH
+
 TREE_TO_GENOMAD_GAP <- 0.005 #0.03
 GENOMAD_TO_RATIO_GAP <- 0.03
 RATIO_TO_PHYLUM_GAP <- 0.03
@@ -59,7 +68,15 @@ CLASS_RING_WIDTH  <- 0.15
 DOT_SIZE    <- 0.4
 DOT_STROKE  <- 0.15
 
-DOT_TO_COMPLETENESS_GAP <- 0.02
+SOURCE_RING_WIDTH <- CLASS_RING_WIDTH
+SOURCE_RING_GAP <- CLASS_TO_DOT_GAP
+
+SOURCE_COLORS <- c(
+  "isolate" = "black",
+  "MAG"     = "grey80"
+)
+
+SOURCE_TO_COMPLETENESS_GAP <- 0.02
 COMPLETENESS_RING_WIDTH <- 0.15
 
 ROOTING_MODES <- c(
@@ -660,7 +677,7 @@ for (tree_file in TREE_FILES) {
           color = geno_group
         ),
         #linewidth = 0.5,
-        linewidth = 0.2,
+        linewidth = PROPHAGE_LINEWIDTH,
         lineend = "butt",
         inherit.aes = FALSE
       ) +
@@ -745,7 +762,7 @@ for (tree_file in TREE_FILES) {
           yend = y,
           color = ratio_group
         ),
-        linewidth = 0.2,
+        linewidth = PROPHAGE_RATIO_LINEWIDTH,
         lineend = "butt",
         inherit.aes = FALSE
       ) +
@@ -801,7 +818,7 @@ for (tree_file in TREE_FILES) {
           yend = y,
           colour = bact_phylum2
         ),
-        linewidth = 0.5,
+        linewidth = BAR_LINEWIDTH,
         lineend = "butt",
         inherit.aes = FALSE,
         show.legend = FALSE
@@ -822,7 +839,7 @@ for (tree_file in TREE_FILES) {
           yend = y,
           colour = bact_class2
         ),
-        linewidth = 0.5,
+        linewidth = BAR_LINEWIDTH,
         lineend = "butt",
         inherit.aes = FALSE,
         show.legend = FALSE
@@ -834,22 +851,47 @@ for (tree_file in TREE_FILES) {
     
     class_outer_r <- max(class_ring_df$class_xend, na.rm = TRUE)
     
-    dot_df <- p_bare$data %>%
+    # ---- Isolate / MAG ring ----
+    source_base_r <- class_outer_r + SOURCE_RING_GAP
+    
+    source_ring_df <- p_bare$data %>%
       dplyr::filter(
         isTip,
         is_prophage,
-        !is.na(integration_status)
+        !is.na(source_type),
+        !is.na(y)
       ) %>%
       dplyr::mutate(
-        dot_x = class_outer_r + CLASS_TO_DOT_GAP,
-        dot_fill = if_else(source_type == "isolate", integration_status, "white")
+        source_x    = source_base_r,
+        source_xend = source_base_r + SOURCE_RING_WIDTH
       )
+    
+    p_bare <- p_bare +
+      ggnewscale::new_scale_color() +
+      geom_segment(
+        data = source_ring_df,
+        aes(
+          x = source_x,
+          xend = source_xend,
+          y = y,
+          yend = y,
+          colour = source_type
+        ),
+        linewidth = BAR_LINEWIDTH,
+        lineend = "butt",
+        inherit.aes = FALSE,
+        show.legend = FALSE
+      ) +
+      scale_color_manual(
+        values = SOURCE_COLORS
+      )
+
     
     # CheckV completeness ring
     
-    dot_outer_r <- max(dot_df$dot_x, na.rm = TRUE)
+    source_outer_r <- max(source_ring_df$source_xend, na.rm = TRUE)
     
-    completeness_base_r <- dot_outer_r + DOT_TO_COMPLETENESS_GAP
+    completeness_base_r <- source_outer_r + SOURCE_TO_COMPLETENESS_GAP
     
     completeness_ring_df <- p_bare$data %>%
       dplyr::filter(
@@ -870,41 +912,15 @@ for (tree_file in TREE_FILES) {
         ratio_df$ratio_xend,
         phylum_ring_df$phyl_xend,
         class_ring_df$class_xend,
-        dot_df$dot_x
+        source_ring_df$source_xend,
+        completeness_ring_df$comp_xend
       ),
       na.rm = TRUE
     )
     
     p_bare <- p_bare + xlim(NA, outer_limit + 0.05)
     
-    p_bare <- p_bare +
-      ggnewscale::new_scale_color() +
-      geom_point(
-        data = dot_df,
-        aes(
-          x = dot_x,
-          y = y,
-          color = integration_status,
-          fill  = dot_fill
-        ),
-        shape = 21,
-        size = 0.1,
-        stroke = 0.1,
-        inherit.aes = FALSE
-      ) +
-      scale_color_manual(
-        values = c(
-          "integrated"     = "red",
-          "non_integrated" = "blue"
-        )
-      ) +
-      scale_fill_manual(
-        values = c(
-          "integrated"     = "red",
-          "non_integrated" = "blue",
-          "white"          = "white"
-        )
-      )
+
     
     p_bare <- p_bare +
       ggnewscale::new_scale_color() +
@@ -917,7 +933,7 @@ for (tree_file in TREE_FILES) {
           yend = y,
           colour = completeness_group_50plus
         ),
-        linewidth = 0.5,
+        linewidth = BAR_LINEWIDTH,
         lineend = "butt",
         inherit.aes = FALSE,
         show.legend = FALSE
@@ -933,7 +949,7 @@ for (tree_file in TREE_FILES) {
         ratio_df$ratio_xend,
         phylum_ring_df$phyl_xend,
         class_ring_df$class_xend,
-        dot_df$dot_x,
+        source_ring_df$source_xend,
         completeness_ring_df$comp_xend
       ),
       na.rm = TRUE
