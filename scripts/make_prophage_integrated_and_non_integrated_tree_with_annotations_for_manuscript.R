@@ -49,6 +49,7 @@ SOURCE_LINEWIDTH       <- BAR_LINEWIDTH
 COMPLETENESS_LINEWIDTH <- BAR_LINEWIDTH
 
 TREE_TO_GENOMAD_GAP <- 0.005 #0.03
+#TREE_TO_GENOMAD_GAP <- 0.01 #0.03
 GENOMAD_TO_RATIO_GAP <- 0.03
 RATIO_TO_PHYLUM_GAP <- 0.03
 PHYLUM_TO_CLASS_GAP <- 0.02
@@ -58,7 +59,8 @@ TEXT_EXTRA_GAP <- 0.03
 GENOMAD_DIV <- 500000
 GENOMAD_LEVELS <- c(50000, 100000, 150000)
 
-RATIO_LEVELS <- c(0.25, 0.50, 0.75, 1.00)
+#RATIO_LEVELS <- c(0.25, 0.50, 0.75, 1.00)
+RATIO_LEVELS <- c(0.50, 1.00)
 RATIO_MULT <- max(GENOMAD_LEVELS) / GENOMAD_DIV
 
 # 50% of max prophage-size bar width (= 0.3 / 2 = 0.15)
@@ -645,6 +647,36 @@ for (tree_file in TREE_FILES) {
         geno_x    = genomad_base_r,
         geno_xend = genomad_base_r + bact_genomad_length_num / genomad_div
       )
+    
+    guide_df <- genomad_ring_df %>%
+      dplyr::filter(
+        !is.na(x),
+        !is.na(y),
+        !is.na(geno_x),
+        !is.na(integration_status),
+        integration_status == "integrated"
+      ) %>%
+      dplyr::mutate(
+        guide_x    = x,
+        guide_xend = geno_x
+      )
+    
+    p_bare <- p_bare +
+      geom_segment(
+        data = guide_df,
+        aes(
+          x = guide_x,
+          xend = guide_xend,
+          y = y,
+          yend = y
+        ),
+        inherit.aes = FALSE,
+        colour = "red",
+        linetype = "dotted",
+        linewidth = 0.1,
+        lineend = "round"
+      )
+
     
     p_bare <- p_bare +
       # dotted reference lines
