@@ -21,6 +21,7 @@ OUTPUT_DIR <- file.path(WD, "figures")
 # Shared input files
 SOURCE_FILE <- file.path(DATA_DIR, "all_genomad_contigs_mags_or_isolates.txt")
 PAIRS_TSV   <- file.path(DATA_DIR, "pairs_prophage_with_flanks_vs_bacterial.tsv")
+CHECKV_FILE <- file.path(DATA_DIR, "checkv_quality_summary.tsv")
 
 # Tree files
 TREE_FILES <- c(
@@ -57,6 +58,9 @@ CLASS_RING_WIDTH  <- 0.15
 
 DOT_SIZE    <- 0.4
 DOT_STROKE  <- 0.15
+
+DOT_TO_COMPLETENESS_GAP <- 0.02
+COMPLETENESS_RING_WIDTH <- 0.15
 
 ROOTING_MODES <- c(
   "outgroup",
@@ -107,6 +111,12 @@ CLASS_COLORS <- c(
   "Betaproteobacteria"  = "#fdbf6f",
   "Other"               = "grey70"
 )
+
+COMPLETENESS_COLORS <- c(
+  "50-74"  = "#FDBF6F",  # orange
+  "75-100" = "#33A02C"   # green
+)
+
 
 crass_families <- setdiff(names(CRASSVIRALES_COLOR_SCHEME), c("Outgroup", "Other"))
 
@@ -198,6 +208,13 @@ find_family_pure_clades <- function(tree, annot_all, crass_families) {
     dplyr::select(node, family, n_tips, n_crass)
   
   pure_nodes
+}
+
+leaf_to_checkv_id <- function(x) {
+  x %>%
+    stringr::str_replace("_[A-Z]{8}_CDS_[0-9]+$", "") %>%
+    stringr::str_replace("\\r$", "") %>%
+    stringr::str_trim()
 }
 
 root_tree_by_mode <- function(tree, mode,
@@ -313,6 +330,29 @@ pairs_map <- pairs %>%
 
 cat("[INFO] pairs_map rows:", nrow(pairs_map), "\n")
 
+checkv_df <- read_tsv(CHECKV_FILE, show_col_types = FALSE) %>%
+  mutate(
+    checkv_id = as.character(contig_id),
+    completeness = suppressWarnings(as.numeric(completeness)),
+    contamination = suppressWarnings(as.numeric(contamination)),
+    completeness_group = case_when(
+      is.na(completeness) ~ NA_character_,
+      completeness < 25 ~ "0-24",
+      completeness < 50 ~ "25-49",
+      completeness < 75 ~ "50-74",
+      TRUE ~ "75-100"
+    ),
+    completeness_group_50plus = case_when(
+      is.na(completeness) ~ NA_character_,
+      completeness >= 75 ~ "75-100",
+      completeness >= 50 ~ "50-74",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  distinct(checkv_id, .keep_all = TRUE)
+
+cat("[INFO] checkv_df rows:", nrow(checkv_df), "\n")
+
 for (tree_file in TREE_FILES) {
   
   message("==== Processing tree file: ", tree_file)
@@ -365,6 +405,20 @@ for (tree_file in TREE_FILES) {
     left_join(source_df, by = c("contig_id" = "contig")) %>%
     mutate(bact_accession = leaf_to_accession(label)) %>%
     left_join(pairs_map, by = "bact_accession") %>%
+    mutate(checkv_id = leaf_to_checkv_id(label)) %>%
+    left_join(
+      checkv_df %>%
+        select(
+          checkv_id,
+          completeness,
+          contamination,
+          checkv_quality,
+          miuvig_quality,
+          completeness_group,
+          completeness_group_50plus
+        ),
+      by = "checkv_id"
+    ) %>%
     mutate(
       integration_status = case_when(
         is_prophage & !is.na(bact_topology) & bact_topology == "Provirus" ~ "integrated",
@@ -492,17 +546,17 @@ for (tree_file in TREE_FILES) {
         values = CRASSVIRALES_COLOR_SCHEME,
         na.value = CRASSVIRALES_COLOR_SCHEME["Other"]
       )  +
-      geom_point2(
-        aes(subset = (node == crass_mrca_node)),
-        colour = "black",
-        size = 2
-      ) +
-      geom_text2(
-        aes(subset = (node == crass_mrca_node), label = paste0("MRCA ", node)),
-        colour = "black",
-        size = 2,
-        nudge_x = 0.02
-      ) +
+      # geom_point2(
+      #   aes(subset = (node == crass_mrca_node)),
+      #   colour = "black",
+      #   size = 2
+      # ) +
+      # geom_text2(
+      #   aes(subset = (node == crass_mrca_node), label = paste0("MRCA ", node)),
+      #   colour = "black",
+      #   size = 2,
+      #   nudge_x = 0.02
+      # ) +
       theme_tree() +
       theme(
         legend.position = "none",
@@ -791,6 +845,24 @@ for (tree_file in TREE_FILES) {
         dot_fill = if_else(source_type == "isolate", integration_status, "white")
       )
     
+    # CheckV completeness ring
+    
+    dot_outer_r <- max(dot_df$dot_x, na.rm = TRUE)
+    
+    completeness_base_r <- dot_outer_r + DOT_TO_COMPLETENESS_GAP
+    
+    completeness_ring_df <- p_bare$data %>%
+      dplyr::filter(
+        isTip,
+        is_prophage,
+        !is.na(completeness_group_50plus),
+        !is.na(y)
+      ) %>%
+      dplyr::mutate(
+        comp_x    = completeness_base_r,
+        comp_xend = completeness_base_r + COMPLETENESS_RING_WIDTH
+      )
+    
     outer_limit <- max(
       c(
         p_bare$data$x,
@@ -834,14 +906,35 @@ for (tree_file in TREE_FILES) {
         )
       )
     
+    p_bare <- p_bare +
+      ggnewscale::new_scale_color() +
+      geom_segment(
+        data = completeness_ring_df,
+        aes(
+          x = comp_x,
+          xend = comp_xend,
+          y = y,
+          yend = y,
+          colour = completeness_group_50plus
+        ),
+        linewidth = 0.5,
+        lineend = "butt",
+        inherit.aes = FALSE,
+        show.legend = FALSE
+      ) +
+      scale_color_manual(
+        values = COMPLETENESS_COLORS
+      )
+    
     outer_limit <- max(
       c(
         p_bare$data$x,
-        phylum_ring_df$phyl_xend,
-        class_ring_df$class_xend,
         genomad_ring_df$geno_xend,
         ratio_df$ratio_xend,
-        dot_df$dot_x
+        phylum_ring_df$phyl_xend,
+        class_ring_df$class_xend,
+        dot_df$dot_x,
+        completeness_ring_df$comp_xend
       ),
       na.rm = TRUE
     )
