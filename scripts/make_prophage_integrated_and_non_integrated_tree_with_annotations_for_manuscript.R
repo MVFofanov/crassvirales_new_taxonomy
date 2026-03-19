@@ -72,7 +72,8 @@ CRASSVIRALES_COLOR_SCHEME <- c(
   "Epsilon"        = "#CD2990",
   "Zeta"           = "#006400",
   "Outgroup"       = "violet",
-  "Other"          = "grey60"
+  "Other"          = "black"
+  #"Other"          = "grey60"
 )
 
 CRASS_CLADE_FILL <- c(
@@ -485,7 +486,7 @@ for (tree_file in TREE_FILES) {
       layout = "fan",
       open.angle = OPEN_ANGLE,
       aes(color = group),
-      size = 0.2
+      size = 0.05 # 0.2
     ) %<+% annot_all +
       scale_color_manual(
         values = CRASSVIRALES_COLOR_SCHEME,
@@ -862,7 +863,7 @@ for (tree_file in TREE_FILES) {
       width = 20,
       height = 20,
       units = "cm",
-      dpi = 1200
+      dpi = 2400
     )
     
     cat("Saved:", out_png, "\n")
