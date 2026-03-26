@@ -33,8 +33,12 @@ COLOR_LINKS_BY_PID <- TRUE
 
 GENE_HEIGHT <- 0.8     # visual height of arrows (y units)
 SEQ_LINEWIDTH <- 0.35  # thickness of seq baseline
-LINK_LINEWIDTH <- 0.25
-GENE_OUTLINE <- 0.20
+LINK_LINEWIDTH <- 0.22 #0.25
+GENE_OUTLINE <- 0.15 #0.20
+
+WIDTH  <- 18
+HEIGTH <- 24   # was 20
+
 
 FUNC_COLORS <- c(
   "connector" = "#5A5A5A",
@@ -749,30 +753,39 @@ make_pair_plot <- function(prophage_id, bacterial_id,
   
   if (nrow(gene_labels) > 0) {
     y_df <- p %>% pull_seqs() %>% distinct(seq_id, y)
+    top_y <- max(y_df$y)
     
     gene_labels <- gene_labels %>%
       left_join(y_df, by = "seq_id") %>%
-      filter(!is.na(y))
+      filter(!is.na(y)) %>%
+      mutate(
+        is_top = (y == top_y),
+        y_lab = if_else(is_top, y, y),   # same anchor y, controlled by vjust
+        vjust_lab = if_else(is_top, -0.9, 1.9)
+      )
     
     p <- p +
       geom_text(
         data = gene_labels,
-        aes(x = x, y = y, label = label),
+        aes(x = x, y = y_lab, label = label, vjust = vjust_lab),
         inherit.aes = FALSE,
         size = 3.2,
-        fontface = "bold",
-        vjust = -0.9
+        fontface = "bold"
       )
   }
   
   # --- tRNA labels as "*" ---
   if (!is.null(trna_pair) && nrow(trna_pair) > 0) {
     y_df <- p %>% pull_seqs() %>% distinct(seq_id, y)
+    top_y <- max(y_df$y)
     
     trna_lab <- trna_pair %>%
       left_join(y_df, by = "seq_id") %>%
       filter(!is.na(y)) %>%
-      mutate(y_star = y + 0.35)  # tweak vertical placement
+      mutate(
+        is_top = (y == top_y),
+        y_star = if_else(is_top, y + 0.35, y - 0.6) #0.35
+      )
     
     p <- p +
       geom_text(
@@ -781,7 +794,8 @@ make_pair_plot <- function(prophage_id, bacterial_id,
         label = "*",
         inherit.aes = FALSE,
         size = 4.2,
-        fontface = "bold"
+        fontface = "bold",
+        vjust = 0.5
       )
   }
   
@@ -926,9 +940,6 @@ final <- cowplot::plot_grid(
   rel_heights = c(1, 0.12, 0.05)   # tune legend height (e.g. 0.10–0.20)
 )
 
-
-WIDTH <- 18 #18
-HEIGTH <- 20 #14
 
 ggsave(OUT_PNG, final, width = WIDTH, height = HEIGTH, dpi = 600)
 
