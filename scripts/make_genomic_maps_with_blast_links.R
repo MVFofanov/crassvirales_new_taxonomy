@@ -422,6 +422,8 @@ tax_last4 <- function(tax) {
 }
 
 
+
+
 make_pair_plot <- function(prophage_id, bacterial_id,
                            phold_df, blast_df, virus_sum_tbl, trna_df, tax_tbl,
                            prophage_taxonomy = NA_character_,
