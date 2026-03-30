@@ -17,6 +17,8 @@ VIRUS_SUMMARY_TSV <- file.path(WD, "all_virus_summary.tsv")
 TRNA_GFF <- file.path(WD, "all_trnascan_out.gff")
 TAX_TSV <- file.path(WD, "all_contigs_virus_summary_ge_10kb_sorted_by_seq_name_ids_uniq_taxonomy.txt")
 
+SHORT_IDS_TSV <- file.path(WD, "TerL_gappy0.8_outgroup_prophage_short_ids.tsv")
+
 OUT_PNG <- file.path(WD, "prophage_vs_bacterial_2x8.png")
 OUT_SVG <- file.path(WD, "prophage_vs_bacterial_2x8.svg")
 OUT_PDF <- file.path(WD, "prophage_vs_bacterial_2x8.pdf")
@@ -39,18 +41,33 @@ GENE_OUTLINE <- 0.15 #0.20
 WIDTH  <- 18
 HEIGTH <- 24   # was 20
 
+PANEL_TEXT_SIZE <- 5.5 #2.8      # for geom_text labels (ggplot size units)
+AXIS_TEXT_SIZE  <- 14       # for theme text (pt)
+TITLE_TEXT_SIZE <- 14       # panel title
+
+
+# FUNC_COLORS <- c(
+#   "connector" = "#5A5A5A",
+#   "DNA, RNA and nucleotide metabolism" = "#f000ff",
+#   "head and packaging" = "#ff008d",
+#   "integration and excision" = "#E0B0FF",
+#   "lysis" = "#001eff",
+#   "moron, auxiliary metabolic gene and host takeover" = "#8900ff",
+#   "other" = "#4deeea",
+#   "tail" = "#74ee15",
+#   "transcription regulation" = "#ffe700",
+#   "unknown" = "#AAAAAA"
+# )
 
 FUNC_COLORS <- c(
-  "connector" = "#5A5A5A",
-  "DNA, RNA and nucleotide metabolism" = "#f000ff",
-  "head and packaging" = "#ff008d",
-  "integration and excision" = "#E0B0FF",
-  "lysis" = "#001eff",
-  "moron, auxiliary metabolic gene and host takeover" = "#8900ff",
-  "other" = "#4deeea",
-  "tail" = "#74ee15",
-  "transcription regulation" = "#ffe700",
-  "unknown" = "#AAAAAA"
+  "Terminase large subunit" = "#d73027",
+  "Integrase"               = "#4575b4",
+  "DNA polymerase"          = "#1a9850",
+  "DNA helicase"            = "#984ea3",
+  "Transposase"             = "#ff7f00",
+  "Major head protein"      = "#e7298a",
+  "Hypothetical protein"    = "#D3D3D3",
+  "Other annotated"         = "#4D4D4D"
 )
 
 # box colors (edit as you like)
@@ -206,6 +223,14 @@ tax_tbl <- read_tsv(TAX_TSV, show_col_types = FALSE) %>%
   select(-tax_list)
 
 
+short_ids <- read_tsv(SHORT_IDS_TSV, show_col_types = FALSE) %>%
+  transmute(
+    bact_accession = as.character(bact_accession),
+    short_id = as.character(short_prophage_id),
+    bact_seq_name = as.character(bact_seq_name)
+  )
+
+
 # ------------------ HELPERS ------------------
 
 make_links_schema <- function(blast_df, prophage_id, bacterial_id, min_align_len, min_pid) {
@@ -319,16 +344,12 @@ extract_gene_labels <- function(genes_df) {
     mutate(
       product_lc = tolower(product),
       label = case_when(
-        # existing
-        str_detect(product_lc, "terminase large subunit") ~ "t",
-        str_detect(product_lc, "\\bintegrase\\b") ~ "i",
-        str_detect(product_lc, "transposase") ~ "+",
-        
-        # NEW
-        str_detect(product_lc, "dna polymerase") ~ "p",
-        str_detect(product_lc, "dna helicase")  ~ "h",
-        str_detect(product_lc, "major head protein")  ~ "m",
-        
+        str_detect(product_lc, "terminase large subunit") ~ "TerL",
+        str_detect(product_lc, "\\bintegrase\\b") ~ "Int",
+        str_detect(product_lc, "transposase") ~ "Tnp",
+        str_detect(product_lc, "dna polymerase") ~ "Pol",
+        str_detect(product_lc, "dna helicase") ~ "Hel",
+        str_detect(product_lc, "major head protein") ~ "MСP",
         TRUE ~ NA_character_
       ),
       x = (start + end) / 2
@@ -417,19 +438,72 @@ debug_taxonomy_matches <- function(seq_ids, tax_raw) {
     select(seq_id, accession, match_type, taxonomy_found, tax_exact, tax_plus_NZ, tax_minus_NZ)
 }
 
-tax_last4 <- function(tax) {
+tax_last2_skip23 <- function(tax) {
   if (is.na(tax) || tax == "") return(NA_character_)
+  
   parts <- str_split(tax, "\\s*;\\s*")[[1]]
   parts <- parts[parts != ""]
+  
   if (length(parts) == 0) return(NA_character_)
-  paste(tail(parts, 4), collapse = "; ")
+  
+  last4 <- tail(parts, 4)
+  
+  if (length(last4) == 4) {
+    paste(last4[c(1, 4)], collapse = "; ")
+  } else {
+    paste(last4, collapse = "; ")
+  }
 }
 
+assign_gene_color_group <- function(product, func) {
+  product[is.na(product)] <- ""
+  func[is.na(func)] <- ""
+  
+  product_lc <- tolower(product)
+  func_lc    <- tolower(func)
+  
+  case_when(
+    str_detect(product_lc, "terminase large subunit") ~ "Terminase large subunit",
+    str_detect(product_lc, "\\bintegrase\\b") ~ "Integrase",
+    str_detect(product_lc, "dna polymerase") ~ "DNA polymerase",
+    str_detect(product_lc, "dna helicase") ~ "DNA helicase",
+    str_detect(product_lc, "transposase") ~ "Transposase",
+    str_detect(product_lc, "major head protein") ~ "Major head protein",
+    
+    product_lc == "hypothetical protein" |
+      func_lc == "unknown" ~ "Hypothetical protein",
+    
+    TRUE ~ "Other annotated"
+  )
+}
 
+map_to_panel_title <- function(accession, short_ids_tbl) {
+  hit <- short_ids_tbl %>%
+    filter(bact_accession == accession) %>%
+    slice(1)
+  
+  if (nrow(hit) == 0) {
+    return(accession)
+  }
+  
+  short_id <- hit$short_id[1]
+  bact_seq_name <- hit$bact_seq_name[1]
+  
+  if (!is.na(short_id) && short_id != "") {
+    if (!is.na(bact_seq_name) && bact_seq_name != "") {
+      return(paste0(short_id, "    ", bact_seq_name))
+    } else {
+      return(short_id)
+    }
+  }
+  
+  accession
+}
 
 
 make_pair_plot <- function(prophage_id, bacterial_id,
                            phold_df, blast_df, virus_sum_tbl, trna_df, tax_tbl,
+                           short_ids,
                            prophage_taxonomy = NA_character_,
                            bacterial_taxonomy = NA_character_,
                            prophage_is_mag = NA_character_,
@@ -481,7 +555,8 @@ make_pair_plot <- function(prophage_id, bacterial_id,
                       gene_min),
       end   = if_else(is_bacterial & !is.null(crop_win),
                       gene_max - crop_win$crop_start + 1L,
-                      gene_max)
+                      gene_max),
+      gene_fill_group = assign_gene_color_group(product, func)
     ) %>%
     transmute(
       seq_id,
@@ -490,7 +565,8 @@ make_pair_plot <- function(prophage_id, bacterial_id,
       strand,
       type = "CDS",
       func,
-      product   # <-- add this
+      product,
+      gene_fill_group
     )
   
   if (nrow(genes) == 0) stop("All genes removed by crop for pair: ", prophage_id, " vs ", bacterial_id)
@@ -509,6 +585,12 @@ make_pair_plot <- function(prophage_id, bacterial_id,
   links <- if (show_self_links) bind_rows(links_pb, links_self) else links_pb
   
   if (is.null(title_txt)) title_txt <- prophage_id
+  
+  # extract accession (remove coordinates)
+  title_acc <- seqid_to_accession(title_txt)
+  
+  # map to panel title
+  title_txt <- map_to_panel_title(title_acc, short_ids)
   
   # --- seqs: enforce bacterial length to crop window length ---
   seqs <- genes %>%
@@ -609,10 +691,10 @@ make_pair_plot <- function(prophage_id, bacterial_id,
   
   label_df <- seq_y %>%
     mutate(
-      label = seq_id,
+      label = seqid_to_accession(seq_id),
       is_top = (y == top_y),
-      y_lab  = if_else(is_top, y + off, y - off),   # NOTE: swapped signs
-      vjust  = if_else(is_top, 1, 0)                # above: anchor bottom; below: anchor top
+      y_lab  = if_else(is_top, y + off, y - off),
+      vjust  = if_else(is_top, 1, 0)
     )
   
   p <- p +
@@ -620,7 +702,7 @@ make_pair_plot <- function(prophage_id, bacterial_id,
       data = label_df,
       aes(x = 1, y = y_lab, label = label, vjust = vjust),
       inherit.aes = FALSE,
-      size = 2.8,
+      size = PANEL_TEXT_SIZE,
       hjust = 0
     )
   
@@ -641,8 +723,8 @@ make_pair_plot <- function(prophage_id, bacterial_id,
   tax_df <- seq_y %>%
     mutate(
       tax = case_when(
-        seq_id == prophage_id  ~ tax_last4(prophage_taxonomy),
-        seq_id == bacterial_id ~ tax_last4(bacterial_taxonomy),
+        seq_id == prophage_id  ~ tax_last2_skip23(prophage_taxonomy),
+        seq_id == bacterial_id ~ tax_last2_skip23(bacterial_taxonomy),
         TRUE ~ NA_character_
       ),
       is_top = (y == top_y),
@@ -657,8 +739,8 @@ make_pair_plot <- function(prophage_id, bacterial_id,
       data = tax_df,
       aes(x = x_lab, y = y_lab, label = tax, vjust = vjust),
       inherit.aes = FALSE,
-      size = 2.8, #2.8
-      hjust = 1   # <-- right-align so it extends LEFT, not outside
+      size = PANEL_TEXT_SIZE,
+      hjust = 1
     )
   
   # --- mid-panel MAG/isolate labels (centered) ---
@@ -697,20 +779,15 @@ make_pair_plot <- function(prophage_id, bacterial_id,
         data = mag_df,
         aes(x = x_lab, y = y_lab, label = mag, vjust = vjust),
         inherit.aes = FALSE,
-        size = 2.6,
-        hjust = 0.5,       # centered text
-        fontface = "bold"  # optional, makes it easier to see
+        size = PANEL_TEXT_SIZE,
+        hjust = 0.5,
+        fontface = "bold"
       )
   }
   
-  
-  
-  
-  
-  
   # genes
   p <- p +
-    geom_gene(aes(fill = func),
+    geom_gene(aes(fill = gene_fill_group),
               position = "strand",
               size = 2.2,
               stroke = GENE_OUTLINE,
@@ -718,18 +795,30 @@ make_pair_plot <- function(prophage_id, bacterial_id,
     scale_fill_manual(
       values = func_colors,
       drop = FALSE,
-      name = "PHOLD function"
+      name = "Gene class"
     ) +
     labs(title = title_txt,
-         x = "Position (bp)") +
+         x = NULL,
+         y = NULL) +
     theme_bw(base_size = 10) +
     theme(
-      plot.title = element_text(size = 14, face = "bold"),
+      plot.title = element_text(size = TITLE_TEXT_SIZE, face = "bold"),
       panel.grid = element_blank(),
-      axis.title = element_blank(),
-      axis.text.x  = element_text(size = 14),   # tick labels
-      axis.title.x = element_text(size = 14),    # if you ever show the title
-      axis.ticks.x = element_line(linewidth = 0.6)
+      
+      # remove axis titles
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      
+      # remove axis text labels
+      axis.text.x = element_blank(),
+      axis.text.y = element_blank(),
+      
+      # remove axis ticks
+      axis.ticks.x = element_blank(),
+      axis.ticks.y = element_blank()
+      
+      # optional: remove axis lines too
+      # axis.line = element_blank()
     ) +
     coord_cartesian(clip = "off")
   
@@ -749,30 +838,32 @@ make_pair_plot <- function(prophage_id, bacterial_id,
   #   guides(shape = guide_legend(override.aes = list(alpha = 1, size = 4)))
   # 
   
-  gene_labels <- extract_gene_labels(genes)
-  
-  if (nrow(gene_labels) > 0) {
-    y_df <- p %>% pull_seqs() %>% distinct(seq_id, y)
-    top_y <- max(y_df$y)
-    
-    gene_labels <- gene_labels %>%
-      left_join(y_df, by = "seq_id") %>%
-      filter(!is.na(y)) %>%
-      mutate(
-        is_top = (y == top_y),
-        y_lab = if_else(is_top, y, y),   # same anchor y, controlled by vjust
-        vjust_lab = if_else(is_top, -0.9, 1.9)
-      )
-    
-    p <- p +
-      geom_text(
-        data = gene_labels,
-        aes(x = x, y = y_lab, label = label, vjust = vjust_lab),
-        inherit.aes = FALSE,
-        size = 3.2,
-        fontface = "bold"
-      )
-  }
+  # gene_labels <- extract_gene_labels(genes)
+  # 
+  # if (nrow(gene_labels) > 0) {
+  #   y_df <- p %>% pull_seqs() %>% distinct(seq_id, y)
+  #   top_y <- max(y_df$y)
+  #   
+  #   gene_labels <- gene_labels %>%
+  #     left_join(y_df, by = "seq_id") %>%
+  #     filter(!is.na(y)) %>%
+  #     mutate(
+  #       is_top = (y == top_y),
+  #       y_lab = if_else(is_top, y + 0.22, y - 0.22)
+  #     )
+  #   
+  #   p <- p +
+  #     geom_text(
+  #       data = gene_labels,
+  #       aes(x = x, y = y_lab, label = label),
+  #       inherit.aes = FALSE,
+  #       size = 2.6,
+  #       fontface = "bold",
+  #       angle = 90,
+  #       vjust = 0.5,
+  #       hjust = 0.5
+  #     )
+  # }
   
   # --- tRNA labels as "*" ---
   if (!is.null(trna_pair) && nrow(trna_pair) > 0) {
@@ -816,6 +907,7 @@ p1 <- make_pair_plot(
   virus_sum_tbl = virus_sum,
   trna_df = trna,
   tax_tbl = tax_tbl,
+  short_ids = short_ids,
   crop_pad = 10000
 )
 
@@ -882,7 +974,8 @@ plots <- purrr::pmap(
       min_pid = MIN_PID,
       show_self_links = SHOW_SELF_LINKS,
       color_links_by_pid = COLOR_LINKS_BY_PID,
-      func_colors = FUNC_COLORS
+      func_colors = FUNC_COLORS,
+      short_ids = short_ids
     )
   }
 )
