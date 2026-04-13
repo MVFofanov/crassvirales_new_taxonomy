@@ -73,6 +73,10 @@ DOT_STROKE  <- 0.15
 SOURCE_RING_WIDTH <- CLASS_RING_WIDTH
 SOURCE_RING_GAP <- CLASS_TO_DOT_GAP
 
+SHORT_ID_TO_LABEL_GAP <- 0.02
+SHORT_ID_TEXT_SIZE <- 0.3
+SHORT_ID_TEXT_COLOR <- "black"
+
 SOURCE_COLORS <- c(
   "isolate" = "black",
   "MAG"     = "grey80"
@@ -81,10 +85,14 @@ SOURCE_COLORS <- c(
 SOURCE_TO_COMPLETENESS_GAP <- 0.02
 COMPLETENESS_RING_WIDTH <- 0.15
 
+# ROOTING_MODES <- c(
+#   "outgroup",
+#   "crass_mrca",
+#   "crass_plus_integrated_mrca"
+# )
+
 ROOTING_MODES <- c(
-  "outgroup",
-  "crass_mrca",
-  "crass_plus_integrated_mrca"
+  "outgroup"
 )
 
 CRASSVIRALES_COLOR_SCHEME <- c(
@@ -597,6 +605,69 @@ for (tree_file in TREE_FILES) {
       }
     }
     
+    # ---- Build short prophage IDs from visual tree order ----
+    tip_order_df <- p_bare$data %>%
+      dplyr::filter(
+        isTip,
+        label %in% annot_all$label
+      ) %>%
+      dplyr::select(label, x, y) %>%
+      dplyr::left_join(
+        annot_all %>%
+          dplyr::select(
+            label,
+            is_prophage,
+            integration_status,
+            completeness,
+            completeness_group,
+            completeness_group_50plus
+          ),
+        by = "label"
+      ) %>%
+      dplyr::filter(is_prophage) %>%
+      dplyr::arrange(desc(y)) %>%   # if numbering looks reversed, change to arrange(desc(y))
+      dplyr::mutate(
+        short_prophage_id = dplyr::row_number()
+      ) %>%
+      dplyr::select(label, short_prophage_id)
+    
+    annot_all_mode <- annot_all %>%
+      dplyr::left_join(tip_order_df, by = "label")
+    
+    short_id_table <- annot_all_mode %>%
+      dplyr::filter(is_prophage, !is.na(short_prophage_id)) %>%
+      dplyr::arrange(short_prophage_id) %>%
+      dplyr::select(
+        short_prophage_id,
+        label,
+        genome_id,
+        family,
+        bact_accession,
+        bact_topology,
+        integration_status,
+        source_type,
+        bact_genomad_length_num,
+        bact_prophage_ratio_num,
+        bact_phylum,
+        bact_class,
+        completeness,
+        contamination,
+        checkv_quality,
+        miuvig_quality,
+        completeness_group,
+        completeness_group_50plus,
+        everything()
+      )
+    
+    out_short_id_tsv <- file.path(
+      OUTPUT_DIR,
+      paste0(stem, "_", mode, "_prophage_short_ids.tsv")
+    )
+    
+    readr::write_tsv(short_id_table, out_short_id_tsv)
+    
+    cat("[OK] Saved short ID table:", out_short_id_tsv, "\n")
+    
     # ---- Prophage length bars for fan tree ----
     # ---- Outer annotation rings ----
     # ---- Prophage length bars for fan tree ----
@@ -974,6 +1045,30 @@ for (tree_file in TREE_FILES) {
         values = COMPLETENESS_COLORS
       )
     
+    label_df <- p_bare$data %>%
+      dplyr::filter(
+        isTip,
+        label %in% annot_all_mode$label
+      ) %>%
+      dplyr::select(label, x, y) %>%
+      dplyr::left_join(
+        annot_all_mode %>%
+          dplyr::select(
+            label,
+            short_prophage_id,
+            is_prophage,
+            integration_status,
+            completeness
+          ),
+        by = "label"
+      ) %>%
+      dplyr::filter(
+        is_prophage,
+        !is.na(short_prophage_id),
+        integration_status == "integrated" |
+          (integration_status == "non_integrated" & !is.na(completeness) & completeness >= 50)
+      )
+    
     outer_limit <- max(
       c(
         p_bare$data$x,
@@ -983,6 +1078,61 @@ for (tree_file in TREE_FILES) {
         class_ring_df$class_xend,
         source_ring_df$source_xend,
         completeness_ring_df$comp_xend
+      ),
+      na.rm = TRUE
+    )
+    
+    p_bare <- p_bare + xlim(NA, outer_limit + 0.05)
+    
+    label_df <- p_bare$data %>%
+      dplyr::filter(
+        isTip,
+        label %in% annot_all_mode$label
+      ) %>%
+      dplyr::select(label, x, y, angle) %>%
+      dplyr::left_join(
+        annot_all_mode %>%
+          dplyr::select(
+            label,
+            short_prophage_id,
+            is_prophage,
+            integration_status,
+            completeness
+          ),
+        by = "label"
+      ) %>%
+      dplyr::filter(
+        is_prophage,
+        !is.na(short_prophage_id),
+        integration_status == "integrated" |
+          (integration_status == "non_integrated" & !is.na(completeness) & completeness >= 50)
+      ) %>%
+      dplyr::mutate(
+        label_x = outer_limit + SHORT_ID_TO_LABEL_GAP,
+        short_prophage_id_chr = as.character(short_prophage_id),
+        text_angle = ifelse(angle > 90 & angle < 270, angle + 180, angle),
+        text_hjust = ifelse(angle > 90 & angle < 270, 1, 0)
+      )
+    
+    p_bare <- p_bare +
+      geom_text(
+        data = label_df,
+        aes(
+          x = label_x,
+          y = y,
+          label = short_prophage_id_chr,
+          angle = text_angle,
+          hjust = text_hjust
+        ),
+        inherit.aes = FALSE,
+        size = SHORT_ID_TEXT_SIZE,
+        colour = SHORT_ID_TEXT_COLOR
+      )
+    
+    outer_limit <- max(
+      c(
+        outer_limit,
+        label_df$label_x
       ),
       na.rm = TRUE
     )
