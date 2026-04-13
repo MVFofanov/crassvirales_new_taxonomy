@@ -12,7 +12,10 @@ library(ggnewscale)
 
 # Main working directory
 #WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/mafft_iqtree_TerL_analysis_reference_best_TerLs_without_KC821624_1_100418/iqtree_trees"
-WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/tree_plots_for_manuscript"
+# WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/tree_plots_for_manuscript"
+# WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/tree_plots_for_manuscript/MRCA_Crassvirales_iqtree_trees"
+WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/tree_plots_for_manuscript/MRCA_integrated_prophage_candidates_iqtree_trees"
+
 DATA_DIR <- file.path(WD, "data")
 
 # Output directory
@@ -22,10 +25,20 @@ OUTPUT_DIR <- file.path(WD, "figures")
 SOURCE_FILE <- file.path(DATA_DIR, "all_genomad_contigs_mags_or_isolates.txt")
 PAIRS_TSV   <- file.path(DATA_DIR, "pairs_prophage_with_flanks_vs_bacterial.tsv")
 CHECKV_FILE <- file.path(DATA_DIR, "checkv_quality_summary.tsv")
+CANDIDATE_LIST_FILE <- file.path(DATA_DIR, "Crassvirales_integrated_prophage_candidate_list.txt")
 
 # Tree files
+# TREE_FILES <- c(
+#   file.path(DATA_DIR, "TerL_gappy0.8.treefile")
+# )
+
 TREE_FILES <- c(
-  file.path(DATA_DIR, "TerL_gappy0.8.treefile")
+  file.path(DATA_DIR, "TerL_gappy0.7.treefile"),
+  file.path(DATA_DIR, "TerL_gappy0.8.treefile"),
+  file.path(DATA_DIR, "TerL_gappy0.9.treefile"),
+  file.path(DATA_DIR, "TerL_kpic.treefile"),
+  file.path(DATA_DIR, "TerL_smart-gap.treefile"),
+  file.path(DATA_DIR, "TerL_untrimmed.treefile")
 )
 
 # Create output directory if needed
@@ -380,6 +393,13 @@ checkv_df <- read_tsv(CHECKV_FILE, show_col_types = FALSE) %>%
 
 cat("[INFO] checkv_df rows:", nrow(checkv_df), "\n")
 
+candidate_ids <- readr::read_lines(CANDIDATE_LIST_FILE) %>%
+  stringr::str_trim() %>%
+  .[. != ""] %>%
+  unique()
+
+cat("[INFO] candidate_ids loaded:", length(candidate_ids), "\n")
+
 for (tree_file in TREE_FILES) {
   
   message("==== Processing tree file: ", tree_file)
@@ -632,13 +652,24 @@ for (tree_file in TREE_FILES) {
       dplyr::select(label, short_prophage_id)
     
     annot_all_mode <- annot_all %>%
-      dplyr::left_join(tip_order_df, by = "label")
+      dplyr::left_join(tip_order_df, by = "label") %>%
+      dplyr::mutate(
+        short_prophage_label = paste0(
+          short_prophage_id,
+          dplyr::case_when(
+            integration_status == "integrated" ~ "i",
+            integration_status == "non_integrated" ~ "n",
+            TRUE ~ ""
+          )
+        )
+      )
     
     short_id_table <- annot_all_mode %>%
       dplyr::filter(is_prophage, !is.na(short_prophage_id)) %>%
       dplyr::arrange(short_prophage_id) %>%
       dplyr::select(
         short_prophage_id,
+        short_prophage_label,
         label,
         genome_id,
         family,
@@ -1045,30 +1076,6 @@ for (tree_file in TREE_FILES) {
         values = COMPLETENESS_COLORS
       )
     
-    label_df <- p_bare$data %>%
-      dplyr::filter(
-        isTip,
-        label %in% annot_all_mode$label
-      ) %>%
-      dplyr::select(label, x, y) %>%
-      dplyr::left_join(
-        annot_all_mode %>%
-          dplyr::select(
-            label,
-            short_prophage_id,
-            is_prophage,
-            integration_status,
-            completeness
-          ),
-        by = "label"
-      ) %>%
-      dplyr::filter(
-        is_prophage,
-        !is.na(short_prophage_id),
-        integration_status == "integrated" |
-          (integration_status == "non_integrated" & !is.na(completeness) & completeness >= 50)
-      )
-    
     outer_limit <- max(
       c(
         p_bare$data$x,
@@ -1095,6 +1102,7 @@ for (tree_file in TREE_FILES) {
           dplyr::select(
             label,
             short_prophage_id,
+            short_prophage_label,
             is_prophage,
             integration_status,
             completeness
@@ -1109,7 +1117,6 @@ for (tree_file in TREE_FILES) {
       ) %>%
       dplyr::mutate(
         label_x = outer_limit + SHORT_ID_TO_LABEL_GAP,
-        short_prophage_id_chr = as.character(short_prophage_id),
         text_angle = ifelse(angle > 90 & angle < 270, angle + 180, angle),
         text_hjust = ifelse(angle > 90 & angle < 270, 1, 0)
       )
@@ -1120,7 +1127,7 @@ for (tree_file in TREE_FILES) {
         aes(
           x = label_x,
           y = y,
-          label = short_prophage_id_chr,
+          label = short_prophage_label,
           angle = text_angle,
           hjust = text_hjust
         ),
