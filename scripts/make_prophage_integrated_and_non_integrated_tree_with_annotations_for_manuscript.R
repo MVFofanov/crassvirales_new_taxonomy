@@ -13,8 +13,8 @@ library(ggnewscale)
 # Main working directory
 #WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/mafft_iqtree_TerL_analysis_reference_best_TerLs_without_KC821624_1_100418/iqtree_trees"
 # WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/tree_plots_for_manuscript"
-# WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/tree_plots_for_manuscript/MRCA_Crassvirales_iqtree_trees"
-WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/tree_plots_for_manuscript/MRCA_integrated_prophage_candidates_iqtree_trees"
+WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/tree_plots_for_manuscript/MRCA_Crassvirales_iqtree_trees"
+# WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/tree_plots_for_manuscript/MRCA_integrated_prophage_candidates_iqtree_trees"
 
 DATA_DIR <- file.path(WD, "data")
 
@@ -134,6 +134,7 @@ PHYLUM_COLORS <- c(
   "Bacteroidota"   = "#33a02c",
   "Bacillota"      = "#1f78b4",
   "Pseudomonadota" = "#ff7f00",
+  "Actinomycetota" = "#6A3D9A",
   "Bacteria"       = "gold",
   "Other"          = "grey70"
 )
@@ -157,6 +158,12 @@ COMPLETENESS_COLORS <- c(
   "75-100" = "#33A02C"   # green
 )
 
+FAMILIES_TO_COLLAPSE <- c("Intestiviridae", "Crevaviridae", "Suoliviridae")
+
+COLLAPSED_TRIANGLE_LENGTH <- 0.18
+COLLAPSED_TRIANGLE_HALF_HEIGHT <- 8
+COLLAPSED_TRIANGLE_ALPHA <- 0.95
+COLLAPSED_TRIANGLE_BORDER <- 0.2
 
 crass_families <- setdiff(names(CRASSVIRALES_COLOR_SCHEME), c("Outgroup", "Other"))
 
@@ -394,6 +401,7 @@ checkv_df <- read_tsv(CHECKV_FILE, show_col_types = FALSE) %>%
 cat("[INFO] checkv_df rows:", nrow(checkv_df), "\n")
 
 candidate_ids <- readr::read_lines(CANDIDATE_LIST_FILE) %>%
+  stringr::str_replace("\\r$", "") %>%
   stringr::str_trim() %>%
   .[. != ""] %>%
   unique()
@@ -490,8 +498,17 @@ for (tree_file in TREE_FILES) {
         is.na(bact_class) ~ NA_character_,
         bact_class %in% names(CLASS_COLORS) ~ bact_class,
         TRUE ~ "Other"
-      )
+      ),
+      bact_seq_name = bact_seq_name %>%
+        as.character() %>%
+        stringr::str_replace("\\r$", "") %>%
+        stringr::str_trim(),
+      is_selected_candidate = !is.na(bact_seq_name) &
+        bact_seq_name %in% candidate_ids
     )
+  
+  cat("[INFO] Tips with bact_seq_name in candidate list:",
+      sum(annot_all$is_selected_candidate, na.rm = TRUE), "\n")
   
   cat("[INFO] Tips with integrated_prophage_label:",
       sum(!is.na(annot_all$integrated_prophage_label) & annot_all$integrated_prophage_label != ""),
@@ -582,46 +599,70 @@ for (tree_file in TREE_FILES) {
     
     OPEN_ANGLE <- 180
     
-    p_bare <- ggtree(
+    p_base <- ggtree(
       tree_grouped,
       layout = "fan",
       open.angle = OPEN_ANGLE,
       aes(color = group),
-      size = 0.05 # 0.2
+      size = 0.05
     ) %<+% annot_all +
       scale_color_manual(
         values = CRASSVIRALES_COLOR_SCHEME,
         na.value = CRASSVIRALES_COLOR_SCHEME["Other"]
-      )  +
-      # geom_point2(
-      #   aes(subset = (node == crass_mrca_node)),
-      #   colour = "black",
-      #   size = 2
-      # ) +
-      # geom_text2(
-      #   aes(subset = (node == crass_mrca_node), label = paste0("MRCA ", node)),
-      #   colour = "black",
-      #   size = 2,
-      #   nudge_x = 0.02
-      # ) +
+      ) +
       theme_tree() +
       theme(
         legend.position = "none",
         plot.margin = margin(20, 80, 20, 20)
       )
     
+    p_full <- p_base
+    p_collapsed <- p_base
+    
     if (nrow(family_pure_clades) > 0) {
       for (i in seq_len(nrow(family_pure_clades))) {
         fam <- family_pure_clades$family[i]
         node <- family_pure_clades$node[i]
         
-        p_bare <- p_bare +
+        p_full <- p_full +
           geom_hilight(
             node = node,
             fill = CRASS_CLADE_FILL[[fam]],
             alpha = 0.25,
             extend = 0.002
           )
+      }
+    }
+    
+    if (nrow(family_pure_clades) > 0) {
+      for (i in seq_len(nrow(family_pure_clades))) {
+        fam <- family_pure_clades$family[i]
+        node <- family_pure_clades$node[i]
+        
+        if (!(fam %in% FAMILIES_TO_COLLAPSE)) {
+          p_collapsed <- p_collapsed +
+            geom_hilight(
+              node = node,
+              fill = CRASS_CLADE_FILL[[fam]],
+              alpha = 0.25,
+              extend = 0.002
+            )
+        }
+      }
+    }
+    
+    # COLLAPSE CRASSVIRALES FAMILIES WITHOUT INTEGRATED PROPHAGES HERE
+    collapse_nodes <- family_pure_clades %>%
+      dplyr::filter(family %in% FAMILIES_TO_COLLAPSE) %>%
+      dplyr::pull(node)
+    
+    if (length(collapse_nodes) > 0) {
+      for (node in collapse_nodes) {
+        p_collapsed <- collapse(
+          p_collapsed,
+          node = node,
+          mode = "max"
+        )
       }
     }
     
@@ -660,7 +701,8 @@ for (tree_file in TREE_FILES) {
             integration_status == "integrated" ~ "i",
             integration_status == "non_integrated" ~ "n",
             TRUE ~ ""
-          )
+          ),
+          dplyr::if_else(is_selected_candidate, "*", "")
         )
       )
     
@@ -670,6 +712,7 @@ for (tree_file in TREE_FILES) {
       dplyr::select(
         short_prophage_id,
         short_prophage_label,
+        is_selected_candidate,
         label,
         genome_id,
         family,
@@ -1150,20 +1193,35 @@ for (tree_file in TREE_FILES) {
     cat("[DEBUG] With source info:",
         sum(!is.na(annot_all$source_type)), "\n")
     
-    out_png <- file.path(
+    out_png_full <- file.path(
       OUTPUT_DIR,
       paste0(stem, "_", mode, "_bare_fan180.png")
     )
     
+    out_png_collapsed <- file.path(
+      OUTPUT_DIR,
+      paste0("collapsed_", stem, "_", mode, "_bare_fan180.png")
+    )
+    
     ggsave(
-      out_png,
-      p_bare,
+      out_png_full,
+      p_full,
       width = 20,
       height = 20,
       units = "cm",
       dpi = 2400
     )
     
-    cat("Saved:", out_png, "\n")
+    ggsave(
+      out_png_collapsed,
+      p_collapsed,
+      width = 20,
+      height = 20,
+      units = "cm",
+      dpi = 2400
+    )
+    
+    cat("Saved:", out_png_full, "\n")
+    cat("Saved:", out_png_collapsed, "\n")
   }
 }
