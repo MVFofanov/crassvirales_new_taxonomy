@@ -1439,22 +1439,29 @@ for (tree_file in TREE_FILES) {
 
     tree_grouped <- groupOTU(tree, groups_list)
 
-    OPEN_ANGLE <- 180
-
-    p_base <- build_base_tree_plot(
+    OPEN_ANGLE_FULL <- 180
+    OPEN_ANGLE_COLLAPSED <- 90
+    
+    p_base_full <- build_base_tree_plot(
       tree_grouped = tree_grouped,
       annot_all = annot_all,
-      open_angle = OPEN_ANGLE
+      open_angle = OPEN_ANGLE_FULL
     )
-
-    all_tip_labels <- p_base$data %>%
+    
+    p_base_collapsed <- build_base_tree_plot(
+      tree_grouped = tree_grouped,
+      annot_all = annot_all,
+      open_angle = OPEN_ANGLE_COLLAPSED
+    )
+    
+    all_tip_labels_full <- p_base_full$data %>%
       dplyr::filter(isTip, !is.na(label)) %>%
       dplyr::pull(label)
-
+    
     collapse_nodes <- family_pure_clades %>%
       dplyr::filter(family %in% FAMILIES_TO_COLLAPSE) %>%
       dplyr::pull(node)
-
+    
     collapsed_tip_labels <- if (length(collapse_nodes) > 0) {
       unique(unlist(lapply(collapse_nodes, function(node) {
         tree$tip.label[get_tip_descendants(tree, node)]
@@ -1462,11 +1469,11 @@ for (tree_file in TREE_FILES) {
     } else {
       character(0)
     }
-
-    visible_labels_collapsed <- setdiff(all_tip_labels, collapsed_tip_labels)
-
-    p_full <- p_base
-    p_collapsed <- p_base
+    
+    visible_labels_collapsed <- setdiff(all_tip_labels_full, collapsed_tip_labels)
+    
+    p_full <- p_base_full
+    p_collapsed <- p_base_collapsed
 
     if (nrow(family_pure_clades) > 0) {
       for (i in seq_len(nrow(family_pure_clades))) {
@@ -1513,23 +1520,8 @@ for (tree_file in TREE_FILES) {
       }
     }
     
-    # if (nrow(collapsed_node_family_df) > 0) {
-    #   for (i in seq_len(nrow(collapsed_node_family_df))) {
-    #     fam <- collapsed_node_family_df$family[i]
-    #     node <- collapsed_node_family_df$node[i]
-    #     
-    #     p_collapsed <- p_collapsed +
-    #       geom_hilight(
-    #         node = node,
-    #         fill = CRASS_CLADE_FILL[[fam]],
-    #         alpha = 0.25,
-    #         extend = 0.002
-    #       )
-    #   }
-    # }
-
     short_id_res <- build_and_save_short_prophage_ids(
-      p_for_order = p_base,
+      p_for_order = p_base_full,
       annot_all = annot_all,
       output_dir = OUTPUT_DIR,
       stem = stem,
