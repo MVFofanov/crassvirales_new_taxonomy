@@ -89,6 +89,7 @@ SOURCE_RING_GAP <- CLASS_TO_DOT_GAP
 
 SHORT_ID_TO_LABEL_GAP <- 0.02
 SHORT_ID_TEXT_SIZE <- 0.3
+SHORT_ID_TEXT_SIZE_COLLAPSED <- 0.6
 SHORT_ID_TEXT_COLOR <- "black"
 
 SOURCE_COLORS <- c(
@@ -283,8 +284,9 @@ build_base_tree_plot <- function(tree_grouped, annot_all, open_angle = 180) {
     ) +
     theme_tree() +
     theme(
-      legend.position = "none",
-      plot.margin = margin(20, 80, 20, 20)
+      legend.position = "none"
+      # plot.margin = margin(20, 80, 20, 20)
+      # plot.margin = margin(1, 3, 1, 1)
     )
 }
 
@@ -1069,10 +1071,10 @@ save_plot_pair <- function(p_full,
                            output_dir,
                            stem,
                            mode,
-                           width = 20,
-                           height = 20,
+                           width = 21.0,
+                           height = 29.7,
                            units = "cm",
-                           dpi = 2400) {
+                           dpi = 1200) {
 
   out_png_full <- file.path(
     output_dir,
@@ -1440,7 +1442,7 @@ for (tree_file in TREE_FILES) {
     tree_grouped <- groupOTU(tree, groups_list)
 
     OPEN_ANGLE_FULL <- 180
-    OPEN_ANGLE_COLLAPSED <- 90
+    OPEN_ANGLE_COLLAPSED <- 60
     
     p_base_full <- build_base_tree_plot(
       tree_grouped = tree_grouped,
@@ -1512,6 +1514,7 @@ for (tree_file in TREE_FILES) {
         p_collapsed <- collapse(
           p_collapsed,
           node = node,
+          # mode = "max",
           mode = "max",
           fill = CRASSVIRALES_COLOR_SCHEME[[fam]],
           alpha = 0.9,
@@ -1533,11 +1536,13 @@ for (tree_file in TREE_FILES) {
     plot_variants <- list(
       full = list(
         p = p_full,
-        visible_labels = NULL
+        visible_labels = NULL,
+        short_id_text_size = SHORT_ID_TEXT_SIZE
       ),
       collapsed = list(
         p = p_collapsed,
-        visible_labels = visible_labels_collapsed
+        visible_labels = visible_labels_collapsed,
+        short_id_text_size = SHORT_ID_TEXT_SIZE_COLLAPSED
       )
     )
 
@@ -1545,6 +1550,7 @@ for (tree_file in TREE_FILES) {
 
       p_current <- plot_variants[[variant_name]]$p
       visible_labels <- plot_variants[[variant_name]]$visible_labels
+      short_id_text_size_current <- plot_variants[[variant_name]]$short_id_text_size
 
       genomad_ann <- annotate_genomad_length(
         p = p_current,
@@ -1588,7 +1594,8 @@ for (tree_file in TREE_FILES) {
       )
       p_current <- draw_short_id_labels(
         p = p_current,
-        label_ann = label_ann
+        label_ann = label_ann,
+        short_id_text_size = short_id_text_size_current
       )
 
       plot_variants[[variant_name]]$p <- p_current
