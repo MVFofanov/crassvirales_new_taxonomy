@@ -290,6 +290,148 @@ build_base_tree_plot <- function(tree_grouped, annot_all, open_angle = 180) {
     )
 }
 
+build_collapsed_tree_from_pure_clades <- function(tree,
+                                                  family_pure_clades,
+                                                  families_to_collapse) {
+  
+  collapsed_node_family_df <- family_pure_clades %>%
+    dplyr::filter(family %in% families_to_collapse) %>%
+    dplyr::mutate(collapse_id = dplyr::row_number()) %>%
+    dplyr::select(node, family, collapse_id)
+  
+  if (nrow(collapsed_node_family_df) == 0) {
+    return(list(
+      tree_collapsed = tree,
+      marker_tip_df = tibble(
+        marker_label = character(),
+        family = character(),
+        representative_tip = character(),
+        removed_tip = character()
+      )
+    ))
+  }
+  
+  tips_to_drop <- character(0)
+  marker_tip_df_list <- list()
+  
+  for (i in seq_len(nrow(collapsed_node_family_df))) {
+    node <- collapsed_node_family_df$node[i]
+    fam  <- collapsed_node_family_df$family[i]
+    cid  <- collapsed_node_family_df$collapse_id[i]
+    
+    clade_tips <- tree$tip.label[get_tip_descendants(tree, node)]
+    
+    if (length(clade_tips) == 0) {
+      next
+    }
+    
+    representative_tip <- clade_tips[1]
+    removed_tips <- setdiff(clade_tips, representative_tip)
+    marker_label <- paste0("collapsed_", fam, "_", cid)
+    
+    tips_to_drop <- c(tips_to_drop, removed_tips)
+    
+    marker_tip_df_list[[length(marker_tip_df_list) + 1]] <- tibble(
+      marker_label = marker_label,
+      family = fam,
+      representative_tip = representative_tip
+    )
+  }
+  
+  tips_to_drop <- unique(tips_to_drop)
+  
+  tree_collapsed <- tree
+  if (length(tips_to_drop) > 0) {
+    tree_collapsed <- ape::drop.tip(tree_collapsed, tips_to_drop)
+  }
+  
+  marker_tip_df <- dplyr::bind_rows(marker_tip_df_list)
+  
+  if (nrow(marker_tip_df) > 0) {
+    idx <- match(marker_tip_df$representative_tip, tree_collapsed$tip.label)
+    tree_collapsed$tip.label[idx] <- marker_tip_df$marker_label
+  }
+  
+  list(
+    tree_collapsed = tree_collapsed,
+    marker_tip_df = marker_tip_df
+  )
+}
+
+build_collapsed_annotation <- function(tree_collapsed,
+                                       annot_all,
+                                       marker_tip_df) {
+  
+  real_tip_labels <- setdiff(tree_collapsed$tip.label, marker_tip_df$marker_label)
+  
+  annot_real <- annot_all %>%
+    dplyr::filter(label %in% real_tip_labels) %>%
+    dplyr::mutate(
+      is_collapsed_marker = FALSE,
+      collapsed_family = NA_character_
+    )
+  
+  annot_markers <- tibble(label = marker_tip_df$marker_label) %>%
+    dplyr::left_join(marker_tip_df, by = c("label" = "marker_label")) %>%
+    dplyr::mutate(
+      genome_id = "collapsed_clade",
+      family = family,
+      is_crassvirales = TRUE,
+      is_prophage = FALSE,
+      integration_status = NA_character_,
+      source_type = NA_character_,
+      bact_phylum2 = NA_character_,
+      bact_class2 = NA_character_,
+      bact_genomad_length_num = NA_real_,
+      bact_prophage_ratio_num = NA_real_,
+      completeness = NA_real_,
+      completeness_group = NA_character_,
+      completeness_group_50plus = NA_character_,
+      is_selected_candidate = FALSE,
+      short_prophage_id = NA_integer_,
+      short_prophage_label = NA_character_,
+      is_collapsed_marker = TRUE,
+      collapsed_family = family
+    )
+  
+  dplyr::bind_rows(annot_real, annot_markers)
+}
+
+add_collapsed_tip_markers <- function(p,
+                                      annot_all_collapsed,
+                                      triangle_size = 2.5,
+                                      triangle_stroke = 0.25) {
+  
+  marker_df <- p$data %>%
+    dplyr::filter(isTip, label %in% annot_all_collapsed$label) %>%
+    dplyr::select(label, x, y) %>%
+    dplyr::left_join(
+      annot_all_collapsed %>%
+        dplyr::select(label, is_collapsed_marker, collapsed_family),
+      by = "label"
+    ) %>%
+    dplyr::filter(is_collapsed_marker)
+  
+  if (nrow(marker_df) == 0) {
+    return(p)
+  }
+  
+  p +
+    ggnewscale::new_scale_fill() +
+    geom_point(
+      data = marker_df,
+      aes(x = x, y = y, fill = collapsed_family),
+      inherit.aes = FALSE,
+      shape = 24,
+      size = triangle_size,
+      stroke = triangle_stroke,
+      colour = "black"
+    ) +
+    scale_fill_manual(
+      values = CRASSVIRALES_COLOR_SCHEME,
+      na.value = CRASSVIRALES_COLOR_SCHEME["Other"]
+    )
+}
 
 build_and_save_short_prophage_ids <- function(p_for_order,
                                               annot_all,
@@ -1439,49 +1581,69 @@ for (tree_file in TREE_FILES) {
     names(groups_list) <- crass_families
     groups_list[["Outgroup"]] <- outgroup_tips
 
-    tree_grouped <- groupOTU(tree, groups_list)
-
+    tree_grouped_full <- groupOTU(tree, groups_list)
+    
+    collapsed_res <- build_collapsed_tree_from_pure_clades(
+      tree = tree,
+      family_pure_clades = family_pure_clades,
+      families_to_collapse = FAMILIES_TO_COLLAPSE
+    )
+    
+    tree_collapsed <- collapsed_res$tree_collapsed
+    marker_tip_df <- collapsed_res$marker_tip_df
+    
+    groups_list_collapsed <- lapply(crass_families, function(fam) {
+      tips <- annot_all %>%
+        dplyr::filter(family == fam) %>%
+        dplyr::pull(label)
+      
+      marker_tips <- marker_tip_df %>%
+        dplyr::filter(family == fam) %>%
+        dplyr::pull(marker_label)
+      
+      intersect(c(tips, marker_tips), tree_collapsed$tip.label)
+    })
+    names(groups_list_collapsed) <- crass_families
+    
+    outgroup_tips_collapsed <- intersect(outgroup_tips, tree_collapsed$tip.label)
+    groups_list_collapsed[["Outgroup"]] <- outgroup_tips_collapsed
+    
+    tree_grouped_collapsed <- groupOTU(tree_collapsed, groups_list_collapsed)
+    
+    annot_all_collapsed <- build_collapsed_annotation(
+      tree_collapsed = tree_collapsed,
+      annot_all = annot_all,
+      marker_tip_df = marker_tip_df
+    )
+    
     OPEN_ANGLE_FULL <- 180
-    OPEN_ANGLE_COLLAPSED <- 60
+    OPEN_ANGLE_COLLAPSED <- 180
     
     p_base_full <- build_base_tree_plot(
-      tree_grouped = tree_grouped,
+      tree_grouped = tree_grouped_full,
       annot_all = annot_all,
       open_angle = OPEN_ANGLE_FULL
     )
     
     p_base_collapsed <- build_base_tree_plot(
-      tree_grouped = tree_grouped,
-      annot_all = annot_all,
+      tree_grouped = tree_grouped_collapsed,
+      annot_all = annot_all_collapsed,
       open_angle = OPEN_ANGLE_COLLAPSED
     )
     
-    all_tip_labels_full <- p_base_full$data %>%
-      dplyr::filter(isTip, !is.na(label)) %>%
-      dplyr::pull(label)
-    
-    collapse_nodes <- family_pure_clades %>%
-      dplyr::filter(family %in% FAMILIES_TO_COLLAPSE) %>%
-      dplyr::pull(node)
-    
-    collapsed_tip_labels <- if (length(collapse_nodes) > 0) {
-      unique(unlist(lapply(collapse_nodes, function(node) {
-        tree$tip.label[get_tip_descendants(tree, node)]
-      })))
-    } else {
-      character(0)
-    }
-    
-    visible_labels_collapsed <- setdiff(all_tip_labels_full, collapsed_tip_labels)
-    
     p_full <- p_base_full
     p_collapsed <- p_base_collapsed
+    
+    p_collapsed <- add_collapsed_tip_markers(
+      p = p_collapsed,
+      annot_all_collapsed = annot_all_collapsed
+    )
 
     if (nrow(family_pure_clades) > 0) {
       for (i in seq_len(nrow(family_pure_clades))) {
         fam <- family_pure_clades$family[i]
         node <- family_pure_clades$node[i]
-
+        
         p_full <- p_full +
           geom_hilight(
             node = node,
@@ -1489,37 +1651,6 @@ for (tree_file in TREE_FILES) {
             alpha = 0.25,
             extend = 0.002
           )
-
-        if (!(fam %in% FAMILIES_TO_COLLAPSE)) {
-          p_collapsed <- p_collapsed +
-            geom_hilight(
-              node = node,
-              fill = CRASS_CLADE_FILL[[fam]],
-              alpha = 0.25,
-              extend = 0.002
-            )
-        }
-      }
-    }
-
-    collapsed_node_family_df <- family_pure_clades %>%
-      dplyr::filter(family %in% FAMILIES_TO_COLLAPSE) %>%
-      dplyr::select(node, family)
-    
-    if (nrow(collapsed_node_family_df) > 0) {
-      for (i in seq_len(nrow(collapsed_node_family_df))) {
-        node <- collapsed_node_family_df$node[i]
-        fam  <- collapsed_node_family_df$family[i]
-        
-        p_collapsed <- collapse(
-          p_collapsed,
-          node = node,
-          # mode = "max",
-          mode = "max",
-          fill = CRASSVIRALES_COLOR_SCHEME[[fam]],
-          alpha = 0.9,
-          colour = "black"
-        )
       }
     }
     
@@ -1532,16 +1663,39 @@ for (tree_file in TREE_FILES) {
     )
 
     annot_all_mode <- short_id_res$annot_all_mode
+    
+    annot_all_collapsed_mode <- annot_all_collapsed %>%
+      dplyr::left_join(
+        annot_all_mode %>%
+          dplyr::select(
+            label,
+            short_prophage_id,
+            short_prophage_label,
+            is_prophage,
+            integration_status,
+            completeness
+          ),
+        by = "label",
+        suffix = c("", "_orig")
+      ) %>%
+      dplyr::mutate(
+        is_prophage = dplyr::coalesce(is_prophage, is_prophage_orig),
+        integration_status = dplyr::coalesce(integration_status, integration_status_orig),
+        completeness = dplyr::coalesce(completeness, completeness_orig)
+      ) %>%
+      dplyr::select(-is_prophage_orig, -integration_status_orig, -completeness_orig)
 
     plot_variants <- list(
       full = list(
         p = p_full,
         visible_labels = NULL,
+        annot = annot_all_mode,
         short_id_text_size = SHORT_ID_TEXT_SIZE
       ),
       collapsed = list(
         p = p_collapsed,
-        visible_labels = visible_labels_collapsed,
+        visible_labels = NULL,
+        annot = annot_all_collapsed_mode,
         short_id_text_size = SHORT_ID_TEXT_SIZE_COLLAPSED
       )
     )
@@ -1588,7 +1742,7 @@ for (tree_file in TREE_FILES) {
 
       label_ann <- annotate_short_id_labels(
         p = p_current,
-        annot_all_mode = annot_all_mode,
+        annot_all_mode = plot_variants[[variant_name]]$annot,
         outer_limit = completeness_ann$plot_outer_limit,
         visible_labels = visible_labels
       )
