@@ -1616,6 +1616,12 @@ for (tree_file in TREE_FILES) {
       marker_tip_df = marker_tip_df
     )
     
+    family_pure_clades_collapsed <- find_family_pure_clades(
+      tree = tree_collapsed,
+      annot_all = annot_all_collapsed,
+      crass_families = crass_families
+    )
+    
     OPEN_ANGLE_FULL <- 180
     OPEN_ANGLE_COLLAPSED <- 180
     
@@ -1651,6 +1657,23 @@ for (tree_file in TREE_FILES) {
             alpha = 0.25,
             extend = 0.002
           )
+      }
+    }
+    
+    if (nrow(family_pure_clades_collapsed) > 0) {
+      for (i in seq_len(nrow(family_pure_clades_collapsed))) {
+        fam <- family_pure_clades_collapsed$family[i]
+        node <- family_pure_clades_collapsed$node[i]
+        
+        if (!(fam %in% FAMILIES_TO_COLLAPSE)) {
+          p_collapsed <- p_collapsed +
+            geom_hilight(
+              node = node,
+              fill = CRASS_CLADE_FILL[[fam]],
+              alpha = 0.25,
+              extend = 0.002
+            )
+        }
       }
     }
     
