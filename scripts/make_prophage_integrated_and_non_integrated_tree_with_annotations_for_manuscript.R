@@ -270,10 +270,14 @@ build_base_tree_plot <- function(tree_grouped, annot_all, open_angle = 180) {
     tree_grouped,
     layout = "fan",
     open.angle = open_angle,
-    aes(color = group),
+    aes(color = group, fill = group),
     size = 0.05
   ) %<+% annot_all +
     scale_color_manual(
+      values = CRASSVIRALES_COLOR_SCHEME,
+      na.value = CRASSVIRALES_COLOR_SCHEME["Other"]
+    ) +
+    scale_fill_manual(
       values = CRASSVIRALES_COLOR_SCHEME,
       na.value = CRASSVIRALES_COLOR_SCHEME["Other"]
     ) +
@@ -1508,10 +1512,9 @@ for (tree_file in TREE_FILES) {
           suffix = c("", "_collapsed")
         ) %>%
         dplyr::mutate(
-          group = dplyr::if_else(
-            !is.na(family_collapsed),
-            family_collapsed,
-            as.character(group)
+          group = dplyr::case_when(
+            !is.na(family_collapsed) ~ family_collapsed,
+            TRUE ~ as.character(group)
           )
         ) %>%
         dplyr::select(-family_collapsed)
