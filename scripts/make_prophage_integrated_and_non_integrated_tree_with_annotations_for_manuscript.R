@@ -288,6 +288,7 @@ build_base_tree_plot <- function(tree_grouped, annot_all, open_angle = 180) {
     )
 }
 
+
 build_and_save_short_prophage_ids <- function(p_for_order,
                                               annot_all,
                                               output_dir,
@@ -1496,44 +1497,36 @@ for (tree_file in TREE_FILES) {
       dplyr::filter(family %in% FAMILIES_TO_COLLAPSE) %>%
       dplyr::select(node, family)
     
-    if (length(collapse_nodes) > 0) {
-      for (node in collapse_nodes) {
+    if (nrow(collapsed_node_family_df) > 0) {
+      for (i in seq_len(nrow(collapsed_node_family_df))) {
+        node <- collapsed_node_family_df$node[i]
+        fam  <- collapsed_node_family_df$family[i]
+        
         p_collapsed <- collapse(
           p_collapsed,
           node = node,
-          mode = "max"
+          mode = "max",
+          fill = CRASSVIRALES_COLOR_SCHEME[[fam]],
+          alpha = 0.9,
+          colour = "black"
         )
       }
-      
-      p_collapsed$data <- p_collapsed$data %>%
-        dplyr::left_join(
-          collapsed_node_family_df,
-          by = "node",
-          suffix = c("", "_collapsed")
-        ) %>%
-        dplyr::mutate(
-          group = dplyr::case_when(
-            !is.na(family_collapsed) ~ family_collapsed,
-            TRUE ~ as.character(group)
-          )
-        ) %>%
-        dplyr::select(-family_collapsed)
     }
     
-    if (nrow(collapsed_node_family_df) > 0) {
-      for (i in seq_len(nrow(collapsed_node_family_df))) {
-        fam <- collapsed_node_family_df$family[i]
-        node <- collapsed_node_family_df$node[i]
-        
-        p_collapsed <- p_collapsed +
-          geom_hilight(
-            node = node,
-            fill = CRASS_CLADE_FILL[[fam]],
-            alpha = 0.25,
-            extend = 0.002
-          )
-      }
-    }
+    # if (nrow(collapsed_node_family_df) > 0) {
+    #   for (i in seq_len(nrow(collapsed_node_family_df))) {
+    #     fam <- collapsed_node_family_df$family[i]
+    #     node <- collapsed_node_family_df$node[i]
+    #     
+    #     p_collapsed <- p_collapsed +
+    #       geom_hilight(
+    #         node = node,
+    #         fill = CRASS_CLADE_FILL[[fam]],
+    #         alpha = 0.25,
+    #         extend = 0.002
+    #       )
+    #   }
+    # }
 
     short_id_res <- build_and_save_short_prophage_ids(
       p_for_order = p_base,
