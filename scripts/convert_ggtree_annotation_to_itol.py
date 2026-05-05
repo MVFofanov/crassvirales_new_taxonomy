@@ -3,39 +3,95 @@
 import argparse
 import re
 from pathlib import Path
+
+from ete3 import Tree
 import pandas as pd
 
 
 # ================================
 # Color schemes
 # ================================
+CRASSVIRALES_FAMILY_COLORS = {
+    "Intestiviridae": "#EE3B3B",
+    "Crevaviridae":   "#EE9A00",
+    "Suoliviridae":   "#4169E1",
+    "Steigviridae":   "#00CED1",
+    "Epsilon":        "#CD2990",
+    "Zeta":           "#006400",
+    "Outgroup":       "#EE82EE",
+    "Other":          "#000000",
+}
+
+# PHYLUM_COLORS = {
+#     "Bacteroidota":   "#33a02c",
+#     "Bacillota":      "#1f78b4",
+#     "Pseudomonadota": "#ff7f00",
+#     "Actinomycetota": "#6A3D9A",
+#     "Bacteria":       "#FFD700",
+#     "Other":          "#B3B3B3",
+# }
+
+# CLASS_COLORS = {
+#     "Flavobacteriia":      "#b2df8a",
+#     "Bacteroidia":         "#a6cee3",
+#     "Cytophagia":          "#ffff99",
+#     "Saprospiria":         "#cab2d6",
+#     "Chitinophagia":       "#6a3d9a",
+#     "Clostridia":          "#b15928",
+#     "Alphaproteobacteria": "#E31A1C",
+#     "Gammaproteobacteria": "#FB9A99",
+#     "Betaproteobacteria":  "#fdbf6f",
+#     "Other":               "#B3B3B3",
+# }
 
 PHYLUM_COLORS = {
-    "Bacteroidota":   "#33a02c",
-    "Bacillota":      "#1f78b4",
-    "Pseudomonadota": "#ff7f00",
-    "Actinomycetota": "#6A3D9A",
-    "Bacteria":       "#FFD700",
-    "Other":          "#B3B3B3",
+    "Bacteroidota":   "#1B9E77",  # green
+    "Bacillota":      "#7570B3",  # purple-blue
+    "Pseudomonadota": "#D95F02",  # orange
+    "Actinomycetota": "#E7298A",  # magenta
+    "Bacteria":       "#666666",  # dark grey
+    "Other":          "#BDBDBD",  # light grey
 }
 
 CLASS_COLORS = {
-    "Flavobacteriia":      "#b2df8a",
-    "Bacteroidia":         "#a6cee3",
-    "Cytophagia":          "#ffff99",
-    "Saprospiria":         "#cab2d6",
-    "Chitinophagia":       "#6a3d9a",
-    "Clostridia":          "#b15928",
-    "Alphaproteobacteria": "#E31A1C",
-    "Gammaproteobacteria": "#FB9A99",
-    "Betaproteobacteria":  "#fdbf6f",
-    "Other":               "#B3B3B3",
+    # Bacteroidota — green/teal shades
+    "Bacteroidia":    "#006D2C",  # dark green
+    "Flavobacteriia": "#31A354",  # medium green
+    "Cytophagia":     "#74C476",  # light green
+    "Saprospiria":    "#238B8D",  # teal
+    "Chitinophagia":  "#00441B",  # very dark green
+
+    # Bacillota — purple/blue shades
+    "Clostridia":     "#54278F",  # dark purple
+
+    # Pseudomonadota — orange/red shades
+    "Alphaproteobacteria": "#D95F02",  # orange
+    "Gammaproteobacteria": "#E6550D",  # red-orange
+    "Betaproteobacteria":  "#Fdae6b",  # light orange
+
+    # fallback
+    "Other": "#BDBDBD",
 }
 
 INTEGRATION_BAR_COLORS = {
     "integrated": "#E31A1C",      # red
     "non_integrated": "#1F78B4",  # blue
 }
+
+SOURCE_TYPE_COLORS = {
+    "isolate": "#000000",
+    "MAG": "#000000",
+}
+
+COMPLETENESS_COLORS = {
+    "75-100": "#33A02C",  # green
+    "50-74":  "#FF7F00",  # orange
+    "25-49":  "#E31A1C",  # red
+    "0-24":   "#E31A1C",  # red
+}
+
+COMMON_MARGIN = 5
+SYMBOL_SIZE = 15
 
 HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
@@ -47,6 +103,10 @@ def parse_args():
     parser.add_argument("--input_tsv", required=True)
     parser.add_argument("--out_dir", required=True)
     parser.add_argument("--show_strip_labels", action="store_true")
+    parser.add_argument("--tree_file", required=False,
+                    help="Tree file used to identify MRCA nodes for Crassvirales families.")
+    parser.add_argument("--reference_taxonomy_tsv", required=False,
+                        help="TSV with reference Crassvirales leaf taxonomy.")
     return parser.parse_args()
 
 
@@ -58,6 +118,22 @@ def validate_colors(color_dict):
             "\n".join(f"{k}: {v}" for k, v in bad.items())
         )
 
+def normalize_source_type(v):
+    if pd.isna(v):
+        return None
+    v = str(v).strip()
+    if v in {"MAG", "isolate"}:
+        return v
+    return None
+
+
+def normalize_completeness_group(v):
+    if pd.isna(v):
+        return None
+    v = str(v).strip()
+    if v in {"75-100", "50-74", "25-49", "0-24"}:
+        return v
+    return None
 
 # ================================
 # Normalization
@@ -121,7 +197,7 @@ def build_itol_colorstrip(df, column, config, show_labels):
         f"DATASET_LABEL\t{config['dataset_label']}",
         "COLOR\t#999999",
         "STRIP_WIDTH\t25",
-        "MARGIN\t5",
+        f"MARGIN\t{COMMON_MARGIN}",
         "BORDER_WIDTH\t1",
         "BORDER_COLOR\t#FFFFFF",
         "SHOW_INTERNAL\t0",
@@ -162,7 +238,7 @@ def build_itol_multibar_length(df):
         "LEGEND_COLORS\t#E31A1C\t#1F78B4",
         "LEGEND_LABELS\tintegrated\tnon_integrated",
         "WIDTH\t200",
-        "MARGIN\t5",
+        f"MARGIN\t{COMMON_MARGIN}",
         "BORDER_WIDTH\t0",
         "DATASET_SCALE\t0-0 kb-#999999-1-0-1\t50-50 kb-#999999-1-0-1\t100-100 kb-#999999-1-0-1\t150-150 kb-#999999-1-0-1\t200-200 kb-#999999-1-0-1",
         "DATA",
@@ -228,6 +304,222 @@ CONFIGS = {
     },
 }
 
+def normalize_crass_family(v):
+    if pd.isna(v):
+        return "Other"
+    v = str(v).strip()
+    return v if v in CRASSVIRALES_FAMILY_COLORS else "Other"
+
+
+def build_itol_tree_colors(tree, ref_df, mode="clade"):
+    """
+    Build TREE_COLORS dataset for Crassvirales family highlights.
+
+    mode:
+        - "clade" : color actual tree branches
+        - "range" : add outer clade/range highlight
+    """
+
+    if mode not in {"clade", "range"}:
+        raise ValueError(f"Unsupported TREE_COLORS mode: {mode}")
+
+    lines = [
+        "TREE_COLORS",
+        "SEPARATOR TAB",
+        "DATA",
+    ]
+
+    family_counts = {}
+
+    for family, sub in ref_df.groupby("family_norm"):
+        leaves = sub["leaf_label"].dropna().astype(str).str.strip().tolist()
+        leaves = [x for x in leaves if x]
+
+        if len(leaves) == 0:
+            continue
+
+        present = [x for x in leaves if tree.search_nodes(name=x)]
+        missing_n = len(leaves) - len(present)
+
+        if len(present) == 0:
+            print(f"[WARN] No leaves from family '{family}' found in tree")
+            continue
+
+        if len(present) == 1:
+            node = tree.search_nodes(name=present[0])[0]
+        else:
+            node = tree.get_common_ancestor(present)
+
+        color = CRASSVIRALES_FAMILY_COLORS.get(
+            family,
+            CRASSVIRALES_FAMILY_COLORS["Other"]
+        )
+
+        if mode == "clade":
+            # node_id  type   color   style   width
+            lines.append(f"{node.name}\tclade\t{color}\tnormal\t2")
+        elif mode == "range":
+            # node_id  type   color   label
+            lines.append(f"{node.name}\trange\t{color}\t{family}")
+
+        family_counts[family] = {
+            "total_leaves": len(leaves),
+            "present_in_tree": len(present),
+            "missing_from_tree": missing_n,
+            "node_id": node.name,
+        }
+
+    return "\n".join(lines) + "\n", family_counts
+
+def assign_unique_internal_node_ids(tree, prefix="NODE"):
+    """
+    Assign unique names to ALL internal nodes.
+    Existing internal labels (e.g. bootstrap strings like 100/100) are replaced.
+    """
+    counter = 1
+    for node in tree.traverse("preorder"):
+        if not node.is_leaf():
+            node.name = f"{prefix}_{counter}"
+            counter += 1
+    return tree
+
+
+def build_itol_binary_source_type(all_tree_leaves, prophage_df):
+    """
+    Build one DATASET_BINARY file for source_type.
+
+    Mapping:
+      isolate -> 1  (filled square)
+      MAG     -> 0  (empty square)
+      missing -> -1 (omitted completely)
+    """
+
+    # map label -> normalized source type from prophage table
+    source_map = (
+        prophage_df[["label", "source_type_norm"]]
+        .drop_duplicates(subset=["label"])
+        .set_index("label")["source_type_norm"]
+        .to_dict()
+    )
+
+    lines = [
+        "DATASET_BINARY",
+        "SEPARATOR TAB",
+        "DATASET_LABEL\tSource type",
+        "COLOR\t#000000",
+        "FIELD_SHAPES\t1",
+        "FIELD_LABELS\tsource_type",
+        "FIELD_COLORS\t#000000",
+        "LEGEND_TITLE\tSource type",
+        "LEGEND_SHAPES\t1\t1",
+        "LEGEND_COLORS\t#000000\t#000000",
+        "LEGEND_LABELS\tisolate (filled)\tMAG (empty)",
+        "DATA",
+    ]
+
+    counts = {"isolate": 0, "MAG": 0, "omitted": 0}
+
+    for leaf in all_tree_leaves:
+        src = source_map.get(leaf, None)
+
+        if src == "isolate":
+            value = 1
+            counts["isolate"] += 1
+        elif src == "MAG":
+            value = 0
+            counts["MAG"] += 1
+        else:
+            value = -1
+            counts["omitted"] += 1
+
+        lines.append(f"{leaf}\t{value}")
+
+    return "\n".join(lines) + "\n", counts
+
+
+def build_itol_source_type_symbols(all_tree_leaves, df):
+    source_map = (
+        df[["label", "source_type_norm"]]
+        .drop_duplicates("label")
+        .set_index("label")["source_type_norm"]
+        .to_dict()
+    )
+
+    lines = [
+        "DATASET_SYMBOL",
+        "SEPARATOR TAB",
+        "DATASET_LABEL\tSource type",
+        "COLOR\t#000000",
+        "LEGEND_TITLE\tSource type",
+        "LEGEND_SHAPES\t1\t1",
+        "LEGEND_COLORS\t#000000\t#000000",
+        "LEGEND_LABELS\tisolate\tMAG",
+        "LEGEND_SHAPE_INVERT\t0\t1",
+        "DATA",
+    ]
+
+    counts = {"isolate": 0, "MAG": 0, "omitted": 0}
+
+    for leaf in all_tree_leaves:
+        src = source_map.get(leaf, None)
+
+        if src == "isolate":
+            # filled square
+            lines.append(f"{leaf}\t1\t{SYMBOL_SIZE}\t#000000\t1\t-1\t")
+            counts["isolate"] += 1
+        elif src == "MAG":
+            # empty square
+            lines.append(f"{leaf}\t1\t{SYMBOL_SIZE}\t#000000\t0\t-1\t")
+            counts["MAG"] += 1
+        else:
+            counts["omitted"] += 1
+            # no entry -> omitted
+
+    return "\n".join(lines) + "\n", counts
+
+def build_itol_completeness_symbols(df, external_position=-2, symbol_size=SYMBOL_SIZE):
+    """
+    Build one DATASET_SYMBOL annotation for completeness_group.
+
+    Circle colors:
+      75-100 -> green
+      50-74  -> orange
+      25-49  -> red
+      0-24   -> red
+    """
+
+    lines = [
+        "DATASET_SYMBOL",
+        "SEPARATOR TAB",
+        "DATASET_LABEL\tCompleteness group",
+        "COLOR\t#999999",
+        "LEGEND_TITLE\tCompleteness group",
+        "LEGEND_SHAPES\t2\t2\t2",
+        "LEGEND_COLORS\t#33A02C\t#FF7F00\t#E31A1C",
+        "LEGEND_LABELS\t75-100\t50-74\t0-49",
+        "DATA",
+    ]
+
+    counts = {"75-100": 0, "50-74": 0, "25-49": 0, "0-24": 0}
+
+    for _, row in df.iterrows():
+        node_id = row["label"]
+        group = row["completeness_group_norm"]
+
+        if group is None:
+            continue
+
+        color = COMPLETENESS_COLORS[group]
+        counts[group] += 1
+
+        # format:
+        # node_id  shape  size  color  fill  position  label
+        # shape 2 = circle
+        # fill 1 = filled
+        lines.append(f"{node_id}\t2\t{SYMBOL_SIZE}\t{color}\t1\t{external_position}\t{group}")
+
+    return "\n".join(lines) + "\n", counts
+
 
 def main():
     args = parse_args()
@@ -241,6 +533,9 @@ def main():
     validate_colors(PHYLUM_COLORS)
     validate_colors(CLASS_COLORS)
     validate_colors(INTEGRATION_BAR_COLORS)
+    validate_colors(CRASSVIRALES_FAMILY_COLORS)
+    validate_colors(SOURCE_TYPE_COLORS)
+    validate_colors(COMPLETENESS_COLORS)
 
     df = pd.read_csv(args.input_tsv, sep="\t", dtype=str)
 
@@ -307,6 +602,121 @@ def main():
         print(f"[OK] Wrote: {out_file}")
         print(sub[f"{col}_norm"].value_counts().to_string(), "\n")
 
+    # --------------------------------
+    # 3) Crassvirales family clade highlights
+    # --------------------------------
+    if args.tree_file and args.reference_taxonomy_tsv:
+        print("[INFO] Processing Crassvirales family clade highlights")
+
+        tree = Tree(args.tree_file, format=1)
+        tree = assign_unique_internal_node_ids(tree)
+
+        named_tree_file = out_dir / f"{prefix}_with_internal_ids.treefile"
+        tree.write(outfile=str(named_tree_file), format=1)
+        print(f"[OK] Wrote tree with internal node IDs: {named_tree_file}")
+
+        ref_df = pd.read_csv(args.reference_taxonomy_tsv, sep="\t", dtype=str)
+
+        required_ref_cols = {"leaf_label", "family"}
+        missing_ref = required_ref_cols - set(ref_df.columns)
+        if missing_ref:
+            raise ValueError(f"Missing required columns in reference taxonomy TSV: {sorted(missing_ref)}")
+
+        ref_df = ref_df[["leaf_label", "family"]].copy()
+        ref_df["leaf_label"] = ref_df["leaf_label"].astype(str).str.strip()
+        ref_df = ref_df[ref_df["leaf_label"] != ""]
+        ref_df["family_norm"] = ref_df["family"].apply(normalize_crass_family)
+
+                # --- clade coloring file ---
+        tree_colors_clade_text, family_counts = build_itol_tree_colors(
+            tree,
+            ref_df,
+            mode="clade"
+        )
+
+        out_file = out_dir / f"{prefix}_crassvirales_family_clades.txt"
+        out_file.write_text(tree_colors_clade_text, encoding="utf-8")
+        print(f"[OK] Wrote: {out_file}")
+
+        # --- range highlighting file ---
+        tree_colors_range_text, _ = build_itol_tree_colors(
+            tree,
+            ref_df,
+            mode="range"
+        )
+
+        out_file = out_dir / f"{prefix}_crassvirales_family_ranges.txt"
+        out_file.write_text(tree_colors_range_text, encoding="utf-8")
+        print(f"[OK] Wrote: {out_file}")
+
+        print("[INFO] Family clade summary:")
+        for fam, info in family_counts.items():
+            print(
+                f"  {fam}: total={info['total_leaves']}, "
+                f"present={info['present_in_tree']}, missing={info['missing_from_tree']}, "
+                f"node_id={info['node_id']}"
+            )
+        print()
+    
+        # --------------------------------
+    # Source type binary layer
+    # --------------------------------
+    if "source_type" in df.columns and args.tree_file:
+        print("[INFO] Processing source_type symbols layer")
+
+        tree_for_leaves = Tree(args.tree_file, format=1)
+        all_tree_leaves = [leaf.name for leaf in tree_for_leaves.iter_leaves()]
+
+        source_df = df[["label", "source_type"]].copy()
+        source_df["source_type_norm"] = source_df["source_type"].apply(normalize_source_type)
+
+        out_text, source_counts = build_itol_source_type_symbols(all_tree_leaves, source_df)
+
+        out_file = out_dir / f"{prefix}_source_type_symbols.txt"
+        out_file.write_text(out_text, encoding="utf-8")
+        print(f"[OK] Wrote: {out_file}")
+
+        print("[INFO] Source type counts:")
+        for k, v in source_counts.items():
+            print(f"  {k}: {v}")
+        print()
+    elif "source_type" not in df.columns:
+        print("[SKIP] source_type binary layer skipped; column 'source_type' not found")
+    elif not args.tree_file:
+        print("[SKIP] source_type binary layer skipped; --tree_file is required to include -1 for missing/reference leaves")
+
+        # --------------------------------
+    # Completeness group symbols layer
+    # --------------------------------
+    if "completeness_group" in df.columns:
+        print("[INFO] Processing completeness_group symbols layer")
+
+        comp_df = df[["label", "completeness_group"]].copy()
+        comp_df["completeness_group_norm"] = comp_df["completeness_group"].apply(normalize_completeness_group)
+
+        before = len(comp_df)
+        comp_df = comp_df.dropna(subset=["completeness_group_norm"])
+        after = len(comp_df)
+
+        if after < before:
+            print(f"[WARN] Skipped {before - after} rows for completeness_group due to missing/invalid values")
+
+        out_text, comp_counts = build_itol_completeness_symbols(
+            comp_df,
+            external_position=-1,
+            symbol_size=SYMBOL_SIZE
+        )
+
+        out_file = out_dir / f"{prefix}_completeness_group_symbols.txt"
+        out_file.write_text(out_text, encoding="utf-8")
+        print(f"[OK] Wrote: {out_file}")
+
+        print("[INFO] Completeness group counts:")
+        for k, v in comp_counts.items():
+            print(f"  {k}: {v}")
+        print()
+    else:
+        print("[SKIP] completeness_group symbols layer skipped; column 'completeness_group' not found")
 
 if __name__ == "__main__":
     main()

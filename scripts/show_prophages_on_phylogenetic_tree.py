@@ -11,7 +11,7 @@ import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import pandas as pd
 from dna_features_viewer import GraphicFeature, GraphicRecord
-from ete3 import Face, NCBITaxa, RectFace, TextFace, Tree, TreeStyle
+from ete3 import Face, NCBITaxa, RectFace, TextFace, Tree, TreeStyle, NodeStyle
 from matplotlib import gridspec
 from PyQt5.QtGui import QColor, QPainter
 
@@ -1246,6 +1246,78 @@ def parse_itol_annotation(file_path: Path) -> tuple[dict[str, str], dict[str, st
 
     return leaf_to_family, family_to_color, crassvirales_families
 
+def add_is_reference_feature(tree: Tree, reference_leaves: set[str]) -> None:
+    """
+    Tag leaves with is_reference=True if they were present in the ORIGINAL iTOL
+    DATASET_STYLE file (i.e., in the 'label  node' lines), else False.
+    """
+    for lf in tree.iter_leaves():
+        lf.add_features(is_reference=(lf.name in reference_leaves))
+
+
+def collapse_reference_family_clades(
+    tree: Tree,
+    leaf_to_family: dict[str, str | None],
+    reference_leaves: set[str],
+    forbid_any_prophage: bool = False,   # set True if you also want to block collapsing when any prophage exists
+) -> None:
+    """
+    Collapse INTERNAL nodes whose descendant leaves:
+      • are ALL is_reference=True (present in original iTOL),
+      • ALL have a family (no unannotated leaves),
+      • and ALL belong to the SAME family.
+
+    Adds node.collapsed_info=[(family, count)] so your layout prints '+N'.
+    """
+
+    def rec(n: Tree) -> tuple[bool, bool, set[str], int, bool]:
+        """
+        Returns for this subtree:
+           all_ref, all_annotated, family_set, nleaves, any_prophage
+        """
+        if n.is_leaf():
+            fam = leaf_to_family.get(n.name)
+            is_ref = getattr(n, "is_reference", False)
+            any_proph = bool(getattr(n, "is_prophage", False))
+            famset = {fam} if fam else set()
+            all_ann = fam is not None
+            n.add_features(collapsed_info=[])
+            return is_ref, all_ann, famset, 1, any_proph
+
+        all_ref = True
+        all_ann = True
+        famset: set[str] = set()
+        total = 0
+        any_proph = False
+
+        for ch in n.children:
+            ch_ref, ch_ann, ch_fams, ch_tot, ch_proph = rec(ch)
+            all_ref   = all_ref and ch_ref
+            all_ann   = all_ann and ch_ann
+            famset   |= ch_fams
+            total    += ch_tot
+            any_proph = any_proph or ch_proph
+
+        pure_one_family = all_ann and (len(famset) == 1)
+
+        # Optional guard: do not collapse clades that contain ANY prophage
+        if forbid_any_prophage and any_proph:
+            n.add_features(collapsed_info=[])
+            return all_ref, all_ann, famset, total, any_proph
+
+        if all_ref and pure_one_family:
+            fam_label = next(iter(famset)) if famset else "Unknown"
+            n.add_features(collapsed_info=[(fam_label, total)])
+            ns = NodeStyle()
+            ns["draw_descendants"] = False  # visually collapse
+            ns["size"] = 0
+            n.set_style(ns)
+        else:
+            n.add_features(collapsed_info=[])
+
+        return all_ref, all_ann, famset, total, any_proph
+    rec(tree)
+
 
 def parse_prophage_table(path: Path) -> tuple[dict[str, dict[str, str]], pd.DataFrame]:
     df = pd.read_csv(path, sep="\t", dtype=str)
@@ -1624,6 +1696,9 @@ def main():
     tree = read_tree(tree_file)
     leaf_to_family, family_to_color, _ = parse_itol_annotation(itol_annotation)
 
+    # ✅ capture ORIGINAL iTOL leaves as "reference"
+    reference_leaves = set(leaf_to_family.keys())   # DO THIS BEFORE MRCA PROPAGATION
+
     taxonomy_df = pd.read_csv(taxonomy_file, sep="\t", dtype=str)
 
     feature_dict = load_functional_annotation(str(functional_annotation_file))
@@ -1638,15 +1713,14 @@ def main():
     # print(f"{feature_dict=}")
 
     # NEW: propagate family annotation by MRCA (you already do this above)
-    propagate_family_annotations_by_mrca(tree, leaf_to_family, family_to_color)
-
-    # === Build consistent metadata mapping for each leaf (already done above if you want to reuse it) ===
-    # leaf_metadata, contig_to_protein, genome_to_protein = build_leaf_metadata(tree)
-
+    # 0) Parse prophages and merge taxonomy (do this ONCE)
     prophage_dict, prophage_df = parse_prophage_table(prophage_table)
     merged_df = merge_prophage_with_taxonomy(prophage_df, taxonomy_df)
 
-    # ### NEW: build & save unified annotation table for ggtree/gggenomes
+    # 1) Propagate family annotation inside pure-family MRCAs
+    propagate_family_annotations_by_mrca(tree, leaf_to_family, family_to_color)
+
+    # 2) Build & save unified tidy annotation table (unchanged behavior)
     annotation_df = build_crassphage_annotation_table(
         tree=tree,
         leaf_to_family=leaf_to_family,   # uses the propagated mapping
@@ -1654,50 +1728,48 @@ def main():
         taxonomy_df=taxonomy_df,         # has 'accession' and 'taxonomy'
         include_unmatched=False          # set True to include leaves with no matched prophage
     )
-
     out_tsv = Path(f"{wd}/Crassphage_prophage_analysis_annotation.tsv")
     annotation_df.to_csv(out_tsv, sep="\t", index=False)
     print(f"[OK] Wrote {len(annotation_df)} rows → {out_tsv}")
 
-    # === Build consistent metadata mapping for each leaf ===
-    # leaf_metadata = build_leaf_metadata(tree)
+    # 3) Leaf metadata & IDs
     leaf_metadata, contig_to_protein, genome_to_protein = build_leaf_metadata(tree)
 
-    # print(f'{leaf_metadata=}\n')
+    # 4) Attach 'family' attribute so ETE can color chips
+    for lf in tree.iter_leaves():
+        fam = leaf_to_family.get(lf.name)
+        if fam:
+            lf.add_features(family=fam)
 
-    # print(f'{contig_to_protein=}\n')
+    # 5) Mark prophage attributes on leaves (used by optional collapse guard & layout)
+    annotate_tree_features(tree, leaf_to_family, family_to_color, prophage_dict, leaf_metadata)
 
-    # print(f'{genome_to_protein=}\n')
-
-    prophage_dict, prophage_df = parse_prophage_table(prophage_table)
-
-    merged_df = merge_prophage_with_taxonomy(prophage_df, taxonomy_df)
-
-    # leaf_order = [leaf.name for leaf in tree.iter_leaves()]
-    # ordered_prophage_dict = OrderedDict()
-    # for leaf_name in leaf_order:
-    #     genome_id = match_genome_id(leaf_name)
-    #     for contig_id, prophage in prophage_dict.items():
-    #         prophage_id = prophage.get("prophage_id", "")
-    #         if prophage_id.startswith(genome_id):
-    #             ordered_prophage_dict[contig_id] = prophage
-
-    # prophage_dict = ordered_prophage_dict
-    # print(prophage_dict)
-
-    leaf_ids = {match_genome_id(leaf.name) for leaf in tree.iter_leaves()}
-    # matched_ids = set(prophage_dict.keys()) & leaf_ids
-    # print(f"[INFO] Matching prophage IDs: {len(matched_ids)} out of {len(prophage_dict)} total prophages")
-
+    # (Optional) quick match stat, as you already had
     matched = sum(
         any(leaf.name.startswith(prophage.get("prophage_id", "")) for leaf in tree.iter_leaves())
         for prophage in prophage_dict.values()
     )
     print(f"[INFO] Matching prophage IDs: {matched} out of {len(prophage_dict)} total prophages")
 
-    # annotate_tree_features(tree, leaf_to_family, family_to_color, prophage_dict)
-    annotate_tree_features(tree, leaf_to_family, family_to_color, prophage_dict, leaf_metadata)
+    # 6) Tag which leaves are “reference” (from ORIGINAL iTOL leaf set)
+    add_is_reference_feature(tree, reference_leaves)
+
+    # 7) Collapse only clades that:
+    #      • consist entirely of reference leaves,
+    #      • are fully annotated (no Unknowns),
+    #      • and are a single family.
+    #    If you also want “no prophage anywhere under the clade”, set forbid_any_prophage=True.
+    collapse_reference_family_clades(
+        tree,
+        leaf_to_family=leaf_to_family,
+        reference_leaves=reference_leaves,
+        forbid_any_prophage=False
+    )
+
+    # 8) Render tree (collapsed visually where allowed)
     render_tree(tree, output_svg, family_to_color)
+    print(f"Annotated tree saved to: {output_svg}")
+
     print(f"Annotated tree saved to: {output_svg}")
 
     print("🔍 Example keys in feature_dict:")

@@ -39,7 +39,7 @@ LINK_LINEWIDTH <- 0.22 #0.25
 GENE_OUTLINE <- 0.15 #0.20
 
 WIDTH  <- 18
-HEIGTH <- 24   # was 20
+HEIGTH <- 28   # was 24
 
 PANEL_TEXT_SIZE <- 5.5 #2.8      # for geom_text labels (ggplot size units)
 AXIS_TEXT_SIZE  <- 14       # for theme text (pt)
@@ -58,6 +58,35 @@ TITLE_TEXT_SIZE <- 14       # panel title
 #   "transcription regulation" = "#ffe700",
 #   "unknown" = "#AAAAAA"
 # )
+
+PHYLUM_COLORS <- c(
+  "Bacteroidota":   "#1B9E77",  # green
+  "Bacillota":      "#7570B3",  # purple-blue
+  "Pseudomonadota": "#D95F02",  # orange
+  "Actinomycetota": "#E7298A",  # magenta
+  "Bacteria":       "#666666",  # dark grey
+  "Other":          "#BDBDBD",  # light grey
+)
+
+CLASS_COLORS <- c(
+  # Bacteroidota — green/teal shades
+  "Bacteroidia":    "#006D2C",  # dark green
+  "Flavobacteriia": "#31A354",  # medium green
+  "Cytophagia":     "#74C476",  # light green
+  "Saprospiria":    "#238B8D",  # teal
+  "Chitinophagia":  "#00441B",  # very dark green
+  
+  # Bacillota — purple/blue shades
+  "Clostridia":     "#54278F",  # dark purple
+  
+  # Pseudomonadota — orange/red shades
+  "Alphaproteobacteria": "#D95F02",  # orange
+  "Gammaproteobacteria": "#E6550D",  # red-orange
+  "Betaproteobacteria":  "#Fdae6b",  # light orange
+  
+  # fallback
+  "Other": "#BDBDBD",
+)
 
 FUNC_COLORS <- c(
   "Terminase large subunit" = "#d73027",
@@ -500,6 +529,10 @@ map_to_panel_title <- function(accession, short_ids_tbl) {
   accession
 }
 
+fmt_bp <- function(x) {
+  format(as.integer(round(x)), big.mark = ",", scientific = FALSE, trim = TRUE)
+}
+
 
 make_pair_plot <- function(prophage_id, bacterial_id,
                            phold_df, blast_df, virus_sum_tbl, trna_df, tax_tbl,
@@ -611,6 +644,71 @@ make_pair_plot <- function(prophage_id, bacterial_id,
   # --- plot ---
   p <- gggenomes(seqs = seqs, genes = genes, links = links) +
     geom_seq(linewidth = SEQ_LINEWIDTH)
+  
+  seq_y <- p %>% pull_seqs() %>% distinct(seq_id, y)
+  
+  top_y <- max(seq_y$y)
+  off_edge <- 0.55
+  
+  edge_df <- seqs %>%
+    select(seq_id, length) %>%
+    left_join(seq_y, by = "seq_id") %>%
+    mutate(
+      is_top = (y == top_y),
+      y_lab = if_else(is_top, y + off_edge, y - off_edge),
+      vjust = if_else(is_top, 1, 0),
+      
+      left_x = 1,
+      right_x = length,
+      
+      left_lab = case_when(
+        seq_id == bacterial_id & !is.null(crop_win) ~ fmt_bp(crop_win$crop_start),
+        TRUE ~ fmt_bp(1)
+      ),
+      right_lab = case_when(
+        seq_id == bacterial_id & !is.null(crop_win) ~ fmt_bp(crop_win$crop_end),
+        TRUE ~ fmt_bp(length)
+      )
+    )
+  
+  p <- p +
+    geom_text(
+      data = edge_df,
+      aes(x = left_x, y = y_lab, label = left_lab, vjust = vjust),
+      inherit.aes = FALSE,
+      hjust = 0,
+      size = PANEL_TEXT_SIZE
+    ) +
+    geom_text(
+      data = edge_df,
+      aes(x = right_x, y = y_lab, label = right_lab, vjust = vjust),
+      inherit.aes = FALSE,
+      hjust = 1,
+      size = PANEL_TEXT_SIZE
+    )
+  
+  edge_ticks <- edge_df %>%
+    transmute(
+      seq_id,
+      x_left = 1,
+      x_right = length,
+      y0 = y - 0.18,
+      y1 = y + 0.18
+    )
+  
+  p <- p +
+    geom_segment(
+      data = edge_ticks,
+      aes(x = x_left, xend = x_left, y = y0, yend = y1),
+      inherit.aes = FALSE,
+      linewidth = 0.4
+    ) +
+    geom_segment(
+      data = edge_ticks,
+      aes(x = x_right, xend = x_right, y = y0, yend = y1),
+      inherit.aes = FALSE,
+      linewidth = 0.4
+    )
   
   # p <- p +
   #   geom_seq_label(

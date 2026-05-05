@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Build a bacterial taxonomy + geNomad + bacterial length annotation table
-for all leaves in a TerL tree.
+for all leaves in one or more TerL trees.
 
 Output columns:
   leaf_label
@@ -39,10 +39,16 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Make bacterial + geNomad + bacterial length annotation table "
-            "for TerL tree leaves."
+            "for TerL tree leaves (one or more trees)."
         )
     )
-    parser.add_argument("--tree", type=Path, required=True, help="TerL Newick treefile")
+    parser.add_argument(
+        "--tree",
+        type=Path,
+        required=True,
+        nargs="+",
+        help="One or more TerL Newick treefiles",
+    )
     parser.add_argument(
         "--taxonomy",
         type=Path,
@@ -61,7 +67,26 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="TSV with bacterial contig lengths: contig, length",
     )
-    parser.add_argument("--out", type=Path, required=True, help="Output TSV")
+
+    out_group = parser.add_mutually_exclusive_group(required=True)
+    out_group.add_argument(
+        "--out",
+        type=Path,
+        nargs="+",
+        help="One or more output TSV paths. If given, must match number of --tree files.",
+    )
+    out_group.add_argument(
+        "--outdir",
+        type=Path,
+        help="Output directory. Output names are derived from tree filenames.",
+    )
+
+    parser.add_argument(
+        "--suffix",
+        type=str,
+        default="_tree_bacterial_taxonomy_with_genomad_and_lengths.tsv",
+        help="Suffix for outputs when using --outdir.",
+    )
     return parser.parse_args()
 
 
@@ -120,9 +145,7 @@ def extract_seq_name_from_leaf(label: str) -> str:
     return label
 
 
-def parse_taxonomy_string(
-    tax_str: str,
-) -> Tuple[str, str, str, str, str, str, str, str]:
+def parse_taxonomy_string(tax_str: str) -> Tuple[str, str, str, str, str, str, str, str]:
     """
     Returns:
       domain, kingdom, phylum, class, order, family, genus, species
@@ -137,7 +160,6 @@ def parse_taxonomy_string(
     domain = parts[0] if parts else "unknown"
     kingdom = parts[1].strip() if len(parts) > 1 and parts[1].strip() else ""
 
-    # Expected: phylum, class, order, family, genus, species
     raw: List[str] = []
     for idx in range(2, 8):
         raw.append(parts[idx].strip() if idx < len(parts) else "")
@@ -151,13 +173,10 @@ def parse_taxonomy_string(
         else:
             filled.append(last_known)
 
-    # If nothing below kingdom is known:
     if not kingdom and not last_known:
         if domain != "unknown":
-            # everything inherits domain
             return (domain,) * 8
-        else:
-            return ("unknown",) * 8
+        return ("unknown",) * 8
 
     if not kingdom:
         kingdom = domain
@@ -167,18 +186,12 @@ def parse_taxonomy_string(
 
 
 def safe_prophage_ratio(genomad_length: str, bacterial_length: str) -> str:
-    """
-    Compute prophage_ratio = round(genomad_length / bacterial_length, 2).
-
-    If any value is missing / non-numeric / zero → "missed".
-    """
     try:
         gl = float(genomad_length)
         bl = float(bacterial_length)
         if bl <= 0:
             return "missed"
-        ratio = gl / bl
-        return f"{ratio:.2f}"
+        return f"{(gl / bl):.2f}"
     except (TypeError, ValueError):
         return "missed"
 
@@ -189,16 +202,13 @@ def build_leaf_taxonomy(
     genomad_df: pd.DataFrame,
     bacterial_len_df: pd.DataFrame,
 ) -> pd.DataFrame:
-
     tax_map: Dict[str, str] = dict(zip(taxonomy_df["accession"], taxonomy_df["taxonomy"]))
 
-    # geNomad mapping: seq_name -> (genomad_length, topology)
     geno_map: Dict[str, Tuple[str, str]] = {
         row["seq_name"]: (row["length"], row["topology"])
         for _, row in genomad_df.iterrows()
     }
 
-    # bacterial contig length mapping: accession/contig -> length
     bact_len_map: Dict[str, str] = dict(zip(bacterial_len_df["contig"], bacterial_len_df["length"]))
 
     t = Tree(tree_path.read_text(), format=1)
@@ -211,7 +221,6 @@ def build_leaf_taxonomy(
         total += 1
         label = leaf.name
         acc = extract_accession(label)
-
         if acc is None:
             continue
 
@@ -219,10 +228,8 @@ def build_leaf_taxonomy(
         if taxonomy_str is None:
             continue
 
-        domain, kingdom, phylum, klass, order, family, genus, species = \
-            parse_taxonomy_string(taxonomy_str)
+        domain, kingdom, phylum, klass, order, family, genus, species = parse_taxonomy_string(taxonomy_str)
 
-        # keep only bacterial genomes
         if domain != "Bacteria":
             continue
 
@@ -258,9 +265,23 @@ def build_leaf_taxonomy(
             }
         )
 
+    print(f"[INFO] Tree: {tree_path}")
     print(f"[INFO] Total leaves: {total}")
     print(f"[INFO] Bacterial leaves kept: {kept}")
     return pd.DataFrame(rows)
+
+
+def resolve_outputs(trees: List[Path], out: Optional[List[Path]], outdir: Optional[Path], suffix: str) -> List[Path]:
+    if out is not None:
+        if len(out) != len(trees):
+            raise SystemExit(
+                f"[ERROR] You provided {len(trees)} --tree files but {len(out)} --out files. They must match."
+            )
+        return out
+
+    assert outdir is not None
+    outdir.mkdir(parents=True, exist_ok=True)
+    return [outdir / f"{tp.stem}{suffix}" for tp in trees]
 
 
 def main() -> None:
@@ -270,17 +291,29 @@ def main() -> None:
     genomad_df = load_genomad_summary(args.genomad_summary)
     bacterial_len_df = load_bacterial_lengths(args.bacterial_lengths)
 
-    df = build_leaf_taxonomy(args.tree, taxonomy_df, genomad_df, bacterial_len_df)
-    df.to_csv(args.out, sep="\t", index=False)
+    out_paths = resolve_outputs(args.tree, args.out, args.outdir, args.suffix)
 
-    print(f"[INFO] Wrote {len(df)} rows → {args.out}")
-    print(f"[INFO] Unique bacterial accessions: {df['accession'].nunique()}")
+    for tree_path, out_path in zip(args.tree, out_paths):
+        df = build_leaf_taxonomy(tree_path, taxonomy_df, genomad_df, bacterial_len_df)
+        df.to_csv(out_path, sep="\t", index=False)
 
-    print("\n[INFO] Phylum counts:")
-    print(df["phylum"].value_counts().sort_values(ascending=False))
+        print(f"[INFO] Wrote {len(df)} rows → {out_path}")
+        print(f"[INFO] Unique bacterial accessions: {df['accession'].nunique() if not df.empty else 0}")
 
-    print("\n[INFO] Class counts:")
-    print(df["class"].value_counts().sort_values(ascending=False))
+        # Keep your per-tree summaries
+        print("\n[INFO] Phylum counts:")
+        if df.empty:
+            print("(none)")
+        else:
+            print(df["phylum"].value_counts().sort_values(ascending=False))
+
+        print("\n[INFO] Class counts:")
+        if df.empty:
+            print("(none)")
+        else:
+            print(df["class"].value_counts().sort_values(ascending=False))
+
+        print("")
 
 
 if __name__ == "__main__":

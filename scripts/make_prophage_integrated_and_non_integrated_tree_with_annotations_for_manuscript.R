@@ -27,19 +27,19 @@ PAIRS_TSV   <- file.path(DATA_DIR, "pairs_prophage_with_flanks_vs_bacterial.tsv"
 CHECKV_FILE <- file.path(DATA_DIR, "checkv_quality_summary.tsv")
 CANDIDATE_LIST_FILE <- file.path(DATA_DIR, "Crassvirales_integrated_prophage_candidate_list.txt")
 
-# Tree files
-TREE_FILES <- c(
-  file.path(DATA_DIR, "TerL_gappy0.7.treefile")
-)
-
+# # Tree files
 # TREE_FILES <- c(
-#   file.path(DATA_DIR, "TerL_gappy0.7.treefile"),
-#   file.path(DATA_DIR, "TerL_gappy0.8.treefile"),
-#   file.path(DATA_DIR, "TerL_gappy0.9.treefile"),
-#   file.path(DATA_DIR, "TerL_kpic.treefile"),
-#   file.path(DATA_DIR, "TerL_smart-gap.treefile"),
-#   file.path(DATA_DIR, "TerL_untrimmed.treefile")
+#   file.path(DATA_DIR, "TerL_gappy0.7.treefile")
 # )
+
+TREE_FILES <- c(
+  file.path(DATA_DIR, "TerL_gappy0.7.treefile"),
+  file.path(DATA_DIR, "TerL_gappy0.8.treefile"),
+  file.path(DATA_DIR, "TerL_gappy0.9.treefile"),
+  file.path(DATA_DIR, "TerL_kpic.treefile"),
+  file.path(DATA_DIR, "TerL_smart-gap.treefile"),
+  file.path(DATA_DIR, "TerL_untrimmed.treefile")
+)
 
 
 # Create output directory if needed
@@ -89,7 +89,7 @@ SOURCE_RING_GAP <- CLASS_TO_DOT_GAP
 
 SHORT_ID_TO_LABEL_GAP <- 0.02
 SHORT_ID_TEXT_SIZE <- 0.3
-SHORT_ID_TEXT_SIZE_COLLAPSED <- 0.6
+SHORT_ID_TEXT_SIZE_COLLAPSED <- 1
 SHORT_ID_TEXT_COLOR <- "black"
 
 SOURCE_COLORS <- c(
@@ -1688,25 +1688,16 @@ for (tree_file in TREE_FILES) {
     annot_all_mode <- short_id_res$annot_all_mode
     
     annot_all_collapsed_mode <- annot_all_collapsed %>%
+      dplyr::select(-short_prophage_id, -short_prophage_label) %>%
       dplyr::left_join(
         annot_all_mode %>%
           dplyr::select(
             label,
             short_prophage_id,
-            short_prophage_label,
-            is_prophage,
-            integration_status,
-            completeness
+            short_prophage_label
           ),
-        by = "label",
-        suffix = c("", "_orig")
-      ) %>%
-      dplyr::mutate(
-        is_prophage = dplyr::coalesce(is_prophage, is_prophage_orig),
-        integration_status = dplyr::coalesce(integration_status, integration_status_orig),
-        completeness = dplyr::coalesce(completeness, completeness_orig)
-      ) %>%
-      dplyr::select(-is_prophage_orig, -integration_status_orig, -completeness_orig)
+        by = "label"
+      )
 
     plot_variants <- list(
       full = list(
