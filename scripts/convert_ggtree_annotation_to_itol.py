@@ -22,29 +22,29 @@ CRASSVIRALES_FAMILY_COLORS = {
     "Other":          "#000000",
 }
 
-# PHYLUM_COLORS = {
-#     "Bacteroidota":   "#33a02c",
-#     "Bacillota":      "#1f78b4",
-#     "Pseudomonadota": "#ff7f00",
-#     "Actinomycetota": "#6A3D9A",
-#     "Bacteria":       "#FFD700",
-#     "Other":          "#B3B3B3",
-# }
+PHYLUM_COLORS_DIFFERENT = {
+    "Bacteroidota":   "#33a02c",
+    "Bacillota":      "#1f78b4",
+    "Pseudomonadota": "#ff7f00",
+    "Actinomycetota": "#6A3D9A",
+    "Bacteria":       "#FFD700",
+    "Other":          "#B3B3B3",
+}
 
-# CLASS_COLORS = {
-#     "Flavobacteriia":      "#b2df8a",
-#     "Bacteroidia":         "#a6cee3",
-#     "Cytophagia":          "#ffff99",
-#     "Saprospiria":         "#cab2d6",
-#     "Chitinophagia":       "#6a3d9a",
-#     "Clostridia":          "#b15928",
-#     "Alphaproteobacteria": "#E31A1C",
-#     "Gammaproteobacteria": "#FB9A99",
-#     "Betaproteobacteria":  "#fdbf6f",
-#     "Other":               "#B3B3B3",
-# }
+CLASS_COLORS_DIFFERENT = {
+    "Flavobacteriia":      "#b2df8a",
+    "Bacteroidia":         "#a6cee3",
+    "Cytophagia":          "#ffff99",
+    "Saprospiria":         "#cab2d6",
+    "Chitinophagia":       "#6a3d9a",
+    "Clostridia":          "#b15928",
+    "Alphaproteobacteria": "#E31A1C",
+    "Gammaproteobacteria": "#FB9A99",
+    "Betaproteobacteria":  "#fdbf6f",
+    "Other":               "#B3B3B3",
+}
 
-PHYLUM_COLORS = {
+PHYLUM_COLORS_SIMILAR = {
     "Bacteroidota":   "#1B9E77",  # green
     "Bacillota":      "#7570B3",  # purple-blue
     "Pseudomonadota": "#D95F02",  # orange
@@ -53,7 +53,7 @@ PHYLUM_COLORS = {
     "Other":          "#BDBDBD",  # light grey
 }
 
-CLASS_COLORS = {
+CLASS_COLORS_SIMILAR = {
     # Bacteroidota — green/teal shades
     "Bacteroidia":    "#006D2C",  # dark green
     "Flavobacteriia": "#31A354",  # medium green
@@ -153,7 +153,9 @@ def normalize_phylum(v):
     }
 
     v = synonym_map.get(v, v)
-    return v if v in PHYLUM_COLORS else "Other"
+    allowed = set(PHYLUM_COLORS_DIFFERENT) | set(PHYLUM_COLORS_SIMILAR)
+
+    return v if v in allowed else "Other"
 
 
 def normalize_class(v):
@@ -161,7 +163,9 @@ def normalize_class(v):
         return "Other"
 
     v = str(v).strip()
-    return v if v in CLASS_COLORS else "Other"
+    allowed = set(CLASS_COLORS_DIFFERENT) | set(CLASS_COLORS_SIMILAR)
+
+    return v if v in allowed else "Other"
 
 
 def normalize_integration_status(v):
@@ -268,10 +272,11 @@ def build_itol_multibar_length(df):
 # ================================
 
 CONFIGS = {
-    "bact_phylum": {
-        "colors": PHYLUM_COLORS,
+    "bact_phylum_different": {
+        "source_column": "bact_phylum",
+        "colors": PHYLUM_COLORS_DIFFERENT,
         "normalize": normalize_phylum,
-        "dataset_label": "Bacterial phylum",
+        "dataset_label": "Bacterial phylum different",
         "legend_title": "Bacterial phylum",
         "legend_order": [
             "Bacteroidota",
@@ -281,12 +286,29 @@ CONFIGS = {
             "Bacteria",
             "Other",
         ],
-        "suffix": "bacterial_phylum",
+        "suffix": "bacterial_phylum_different",
     },
-    "bact_class": {
-        "colors": CLASS_COLORS,
+    "bact_phylum_similar": {
+        "source_column": "bact_phylum",
+        "colors": PHYLUM_COLORS_SIMILAR,
+        "normalize": normalize_phylum,
+        "dataset_label": "Bacterial phylum similar",
+        "legend_title": "Bacterial phylum",
+        "legend_order": [
+            "Bacteroidota",
+            "Bacillota",
+            "Pseudomonadota",
+            "Actinomycetota",
+            "Bacteria",
+            "Other",
+        ],
+        "suffix": "bacterial_phylum_similar",
+    },
+    "bact_class_different": {
+        "source_column": "bact_class",
+        "colors": CLASS_COLORS_DIFFERENT,
         "normalize": normalize_class,
-        "dataset_label": "Bacterial class",
+        "dataset_label": "Bacterial class different",
         "legend_title": "Bacterial class",
         "legend_order": [
             "Flavobacteriia",
@@ -300,7 +322,27 @@ CONFIGS = {
             "Betaproteobacteria",
             "Other",
         ],
-        "suffix": "bacterial_class",
+        "suffix": "bacterial_class_different",
+    },
+    "bact_class_similar": {
+        "source_column": "bact_class",
+        "colors": CLASS_COLORS_SIMILAR,
+        "normalize": normalize_class,
+        "dataset_label": "Bacterial class similar",
+        "legend_title": "Bacterial class",
+        "legend_order": [
+            "Flavobacteriia",
+            "Bacteroidia",
+            "Cytophagia",
+            "Saprospiria",
+            "Chitinophagia",
+            "Clostridia",
+            "Alphaproteobacteria",
+            "Gammaproteobacteria",
+            "Betaproteobacteria",
+            "Other",
+        ],
+        "suffix": "bacterial_class_similar",
     },
 }
 
@@ -521,6 +563,91 @@ def build_itol_completeness_symbols(df, external_position=-2, symbol_size=SYMBOL
     return "\n".join(lines) + "\n", counts
 
 
+def parse_completeness_percent(v):
+    if pd.isna(v):
+        return None
+    v = str(v).strip().replace("%", "")
+    if v == "":
+        return None
+    try:
+        x = float(v)
+    except ValueError:
+        return None
+    return max(0.0, min(100.0, x))
+
+
+def interpolate_hex(c0, c1, t):
+    c0 = c0.lstrip("#")
+    c1 = c1.lstrip("#")
+
+    r0, g0, b0 = int(c0[0:2], 16), int(c0[2:4], 16), int(c0[4:6], 16)
+    r1, g1, b1 = int(c1[0:2], 16), int(c1[2:4], 16), int(c1[4:6], 16)
+
+    r = round(r0 + (r1 - r0) * t)
+    g = round(g0 + (g1 - g0) * t)
+    b = round(b0 + (b1 - b0) * t)
+
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def completeness_to_color(x):
+    # viridis-like gradient (very distinguishable)
+    stops = [
+        (0,   "#440154"),
+        (25,  "#3B528B"),
+        (50,  "#21918C"),
+        (75,  "#5EC962"),
+        (100, "#FDE725"),
+    ]
+
+    for (x0, c0), (x1, c1) in zip(stops[:-1], stops[1:]):
+        if x0 <= x <= x1:
+            t = (x - x0) / (x1 - x0)
+            return interpolate_hex(c0, c1, t)
+
+    return stops[-1][1]
+
+def build_itol_completeness_tip_symbols(df, position=1, symbol_size=SYMBOL_SIZE):
+    """
+    Draw completeness as filled circles at leaf tips using continuous colors.
+    Legend shows reference points along the gradient.
+    """
+
+    lines = [
+        "DATASET_SYMBOL",
+        "SEPARATOR TAB",
+        "DATASET_LABEL\tCompleteness",
+        "COLOR\t#999999",
+
+        # Manual reference legend for continuous gradient
+        "LEGEND_TITLE\tCompleteness (%)",
+        "LEGEND_SHAPES\t2\t2\t2\t2\t2",
+        "LEGEND_COLORS\t#440154\t#3B528B\t#21918C\t#5EC962\t#FDE725",
+        "LEGEND_LABELS\t0\t25\t50\t75\t100",
+
+        "DATA",
+    ]
+
+    counts = {"written": 0, "skipped": 0}
+
+    for _, row in df.iterrows():
+        node_id = row["label"]
+        completeness = row["completeness_percent"]
+
+        if pd.isna(completeness):
+            counts["skipped"] += 1
+            continue
+
+        color = completeness_to_color(completeness)
+
+        lines.append(
+            f"{node_id}\t2\t{symbol_size}\t{color}\t1\t{position}\t{completeness:.1f}%"
+        )
+
+        counts["written"] += 1
+
+    return "\n".join(lines) + "\n", counts
+
 def main():
     args = parse_args()
 
@@ -530,8 +657,10 @@ def main():
     prefix = out_dir.name
     print(f"[INFO] Using prefix: {prefix}")
 
-    validate_colors(PHYLUM_COLORS)
-    validate_colors(CLASS_COLORS)
+    validate_colors(PHYLUM_COLORS_DIFFERENT)
+    validate_colors(PHYLUM_COLORS_SIMILAR)
+    validate_colors(CLASS_COLORS_DIFFERENT)
+    validate_colors(CLASS_COLORS_SIMILAR)
     validate_colors(INTEGRATION_BAR_COLORS)
     validate_colors(CRASSVIRALES_FAMILY_COLORS)
     validate_colors(SOURCE_TYPE_COLORS)
@@ -579,19 +708,21 @@ def main():
     # --------------------------------
     # 2+) Color strip layers
     # --------------------------------
-    for col, cfg in CONFIGS.items():
-        if col not in df.columns:
-            print(f"[SKIP] Column {col} not found")
+    for config_name, cfg in CONFIGS.items():
+        source_col = cfg["source_column"]
+
+        if source_col not in df.columns:
+            print(f"[SKIP] Column {source_col} not found for {config_name}")
             continue
 
-        print(f"[INFO] Processing {col}")
+        print(f"[INFO] Processing {config_name} from column {source_col}")
 
-        sub = df[["label", col]].copy()
-        sub[f"{col}_norm"] = sub[col].apply(cfg["normalize"])
+        sub = df[["label", source_col]].copy()
+        sub[f"{source_col}_norm"] = sub[source_col].apply(cfg["normalize"])
 
         out_text = build_itol_colorstrip(
             sub,
-            column=col,
+            column=source_col,
             config=cfg,
             show_labels=args.show_strip_labels
         )
@@ -600,7 +731,8 @@ def main():
         out_file.write_text(out_text, encoding="utf-8")
 
         print(f"[OK] Wrote: {out_file}")
-        print(sub[f"{col}_norm"].value_counts().to_string(), "\n")
+        print(sub[f"{source_col}_norm"].value_counts().to_string(), "\n")
+
 
     # --------------------------------
     # 3) Crassvirales family clade highlights
@@ -685,38 +817,41 @@ def main():
     elif not args.tree_file:
         print("[SKIP] source_type binary layer skipped; --tree_file is required to include -1 for missing/reference leaves")
 
-        # --------------------------------
-    # Completeness group symbols layer
     # --------------------------------
-    if "completeness_group" in df.columns:
-        print("[INFO] Processing completeness_group symbols layer")
+    # Completeness tip circles
+    # --------------------------------
+    completeness_col = "completeness"
 
-        comp_df = df[["label", "completeness_group"]].copy()
-        comp_df["completeness_group_norm"] = comp_df["completeness_group"].apply(normalize_completeness_group)
+    if completeness_col in df.columns:
+        print("[INFO] Processing completeness tip-circle layer")
+
+        comp_df = df[["label", completeness_col]].copy()
+        comp_df["completeness_percent"] = comp_df[completeness_col].apply(parse_completeness_percent)
 
         before = len(comp_df)
-        comp_df = comp_df.dropna(subset=["completeness_group_norm"])
+        comp_df = comp_df.dropna(subset=["completeness_percent"])
         after = len(comp_df)
 
         if after < before:
-            print(f"[WARN] Skipped {before - after} rows for completeness_group due to missing/invalid values")
+            print(f"[WARN] Skipped {before - after} rows for completeness due to missing/invalid values")
 
-        out_text, comp_counts = build_itol_completeness_symbols(
+        out_text, comp_counts = build_itol_completeness_tip_symbols(
             comp_df,
-            external_position=-1,
+            position=1,
             symbol_size=SYMBOL_SIZE
         )
 
-        out_file = out_dir / f"{prefix}_completeness_group_symbols.txt"
+        out_file = out_dir / f"{prefix}_completeness_tip_circles.txt"
         out_file.write_text(out_text, encoding="utf-8")
         print(f"[OK] Wrote: {out_file}")
 
-        print("[INFO] Completeness group counts:")
+        print("[INFO] Completeness symbols:")
         for k, v in comp_counts.items():
             print(f"  {k}: {v}")
         print()
+
     else:
-        print("[SKIP] completeness_group symbols layer skipped; column 'completeness_group' not found")
+        print(f"[SKIP] completeness tip-circle layer skipped; column '{completeness_col}' not found")
 
 if __name__ == "__main__":
     main()
