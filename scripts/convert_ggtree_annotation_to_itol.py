@@ -107,6 +107,11 @@ def parse_args():
                     help="Tree file used to identify MRCA nodes for Crassvirales families.")
     parser.add_argument("--reference_taxonomy_tsv", required=False,
                         help="TSV with reference Crassvirales leaf taxonomy.")
+    parser.add_argument(
+                        "--integrated_candidates",
+                        required=False,
+                        help="Text file with confirmed integrated prophage IDs, one per line."
+                    )
     return parser.parse_args()
 
 
@@ -134,6 +139,60 @@ def normalize_completeness_group(v):
     if v in {"75-100", "50-74", "25-49", "0-24"}:
         return v
     return None
+
+
+def get_leaf_family_map(ref_df):
+    return (
+        ref_df[["leaf_label", "family_norm"]]
+        .dropna()
+        .assign(leaf_label=lambda x: x["leaf_label"].astype(str).str.strip())
+        .set_index("leaf_label")["family_norm"]
+        .to_dict()
+    )
+
+
+def find_maximal_pure_family_clades(tree, family, leaf_to_family):
+    """
+    Return largest non-overlapping clades where all annotated Crassvirales leaves
+    inside the clade belong to `family`.
+
+    Unannotated leaves are ignored for purity.
+    """
+    selected = []
+
+    for node in tree.traverse("postorder"):
+        if node.is_leaf():
+            continue
+        if node.is_root():
+            continue
+        if not node.name:
+            continue
+
+        leaves = [leaf.name for leaf in node.iter_leaves()]
+        annotated_families = {
+            leaf_to_family[x]
+            for x in leaves
+            if x in leaf_to_family
+        }
+
+        if annotated_families == {family}:
+            selected.append(node)
+
+    # keep only maximal clades, not nested child clades
+    maximal = []
+    for node in selected:
+        has_selected_ancestor = False
+        parent = node.up
+        while parent is not None:
+            if parent in selected:
+                has_selected_ancestor = True
+                break
+            parent = parent.up
+
+        if not has_selected_ancestor:
+            maximal.append(node)
+
+    return maximal
 
 # ================================
 # Normalization
@@ -357,9 +416,9 @@ def build_itol_tree_colors(tree, ref_df, mode="clade"):
     """
     Build TREE_COLORS dataset for Crassvirales family highlights.
 
-    mode:
-        - "clade" : color actual tree branches
-        - "range" : add outer clade/range highlight
+    Instead of one MRCA per family, this version finds maximal pure,
+    non-overlapping clades for each family. This avoids root-level MRCAs
+    when a family is non-monophyletic.
     """
 
     if mode not in {"clade", "range"}:
@@ -372,44 +431,50 @@ def build_itol_tree_colors(tree, ref_df, mode="clade"):
     ]
 
     family_counts = {}
+    leaf_to_family = get_leaf_family_map(ref_df)
 
-    for family, sub in ref_df.groupby("family_norm"):
-        leaves = sub["leaf_label"].dropna().astype(str).str.strip().tolist()
-        leaves = [x for x in leaves if x]
-
-        if len(leaves) == 0:
+    for family in sorted(ref_df["family_norm"].dropna().unique()):
+        if family == "Other":
+            print("[INFO] Skipping 'Other' for clade/range highlighting")
             continue
-
-        present = [x for x in leaves if tree.search_nodes(name=x)]
-        missing_n = len(leaves) - len(present)
-
-        if len(present) == 0:
-            print(f"[WARN] No leaves from family '{family}' found in tree")
-            continue
-
-        if len(present) == 1:
-            node = tree.search_nodes(name=present[0])[0]
-        else:
-            node = tree.get_common_ancestor(present)
-
         color = CRASSVIRALES_FAMILY_COLORS.get(
             family,
             CRASSVIRALES_FAMILY_COLORS["Other"]
         )
 
-        if mode == "clade":
-            # node_id  type   color   style   width
-            lines.append(f"{node.name}\tclade\t{color}\tnormal\t2")
-        elif mode == "range":
-            # node_id  type   color   label
-            lines.append(f"{node.name}\trange\t{color}\t{family}")
+        nodes = find_maximal_pure_family_clades(tree, family, leaf_to_family)
+
+        if not nodes:
+            print(f"[WARN] No pure non-root clades found for family '{family}'")
+            continue
+
+        for i, node in enumerate(nodes, start=1):
+            if mode == "clade":
+                lines.append(f"{node.name}\tclade\t{color}\tnormal\t2")
+            elif mode == "range":
+                label = family
+                lines.append(f"{node.name}\trange\t{color}\t{label}")
 
         family_counts[family] = {
-            "total_leaves": len(leaves),
-            "present_in_tree": len(present),
-            "missing_from_tree": missing_n,
-            "node_id": node.name,
+            "n_clades": len(nodes),
+            "node_ids": ",".join(node.name for node in nodes),
         }
+
+        print(
+            f"[INFO] {family}: wrote {len(nodes)} pure non-overlapping clade(s): "
+            + ", ".join(node.name for node in nodes)
+        )
+
+    # --------------------------------
+    # Optional explicit outgroup mark
+    # --------------------------------
+    if mode == "range":
+        outgroup_leaf = "NC_021803_SVJPHRHJ_CDS_26578"
+
+        if outgroup_leaf in {leaf.name for leaf in tree.iter_leaves()}:
+            lines.append(
+                f"{outgroup_leaf}\trange\t#000000\tOutgroup"
+            )
 
     return "\n".join(lines) + "\n", family_counts
 
@@ -424,6 +489,39 @@ def assign_unique_internal_node_ids(tree, prefix="NODE"):
             node.name = f"{prefix}_{counter}"
             counter += 1
     return tree
+
+
+def build_integrated_candidate_symbols(tree, candidate_file, symbol_size=18):
+    candidates = [
+        line.strip()
+        for line in Path(candidate_file).read_text().splitlines()
+        if line.strip()
+    ]
+
+    lines = [
+        "DATASET_SYMBOL",
+        "SEPARATOR TAB",
+        "DATASET_LABEL\tConfirmed integrated candidates",
+        "COLOR\t#E31A1C",
+        "LEGEND_TITLE\tConfirmed candidates",
+        "LEGEND_SHAPES\t1",
+        "LEGEND_COLORS\t#E31A1C",
+        "LEGEND_LABELS\tconfirmed integrated prophage",
+        "DATA",
+    ]
+
+    count = 0
+
+    for leaf in tree.iter_leaves():
+        leaf_name = leaf.name
+
+        if any(leaf_name.startswith(candidate) for candidate in candidates):
+            lines.append(
+                f"{leaf_name}\t1\t{symbol_size}\t#E31A1C\t1\t-1\tconfirmed"
+            )
+            count += 1
+
+    return "\n".join(lines) + "\n", count
 
 
 def build_itol_binary_source_type(all_tree_leaves, prophage_df):
@@ -678,6 +776,22 @@ def main():
         print("[WARN] Duplicate labels found, keeping first")
         df = df.drop_duplicates(subset=["label"])
 
+    if args.integrated_candidates and args.tree_file:
+        print("[INFO] Processing confirmed integrated candidate symbols")
+
+        tree_for_candidates = Tree(args.tree_file, format=1)
+
+        out_text, n_candidates = build_integrated_candidate_symbols(
+            tree_for_candidates,
+            args.integrated_candidates
+        )
+
+        out_file = out_dir / f"{prefix}_confirmed_integrated_candidates.txt"
+        out_file.write_text(out_text, encoding="utf-8")
+
+        print(f"[OK] Wrote: {out_file}")
+        print(f"[INFO] Confirmed candidate leaves marked: {n_candidates}")
+
     # --------------------------------
     # 1) First layer: prophage length
     # --------------------------------
@@ -784,9 +898,8 @@ def main():
         print("[INFO] Family clade summary:")
         for fam, info in family_counts.items():
             print(
-                f"  {fam}: total={info['total_leaves']}, "
-                f"present={info['present_in_tree']}, missing={info['missing_from_tree']}, "
-                f"node_id={info['node_id']}"
+                f"  {fam}: n_clades={info['n_clades']}, "
+                f"node_ids={info['node_ids']}"
             )
         print()
     

@@ -30,6 +30,16 @@ def parse_args():
         required=True,
         help="Output directory"
     )
+    parser.add_argument(
+        "--prophages_to_exclude",
+        default=None,
+        help="Optional file containing labels of prophages to exclude (one per line)"
+        )
+    parser.add_argument(
+        "--poster",
+        action="store_true",
+        help="Generate simplified poster version (2 panels)."
+    )
     return parser.parse_args()
 
 
@@ -178,7 +188,7 @@ def source_type_metric_tests(df, cols):
 # =========================
 # Plot
 # =========================
-def make_plot(df, outdir):
+def make_plot(df, outdir, poster=False):
     order = ["integrated", "non_integrated"]
 
     palette = {
@@ -186,13 +196,30 @@ def make_plot(df, outdir):
         "non_integrated": "#4169E1"
     }
 
-    sns.set_theme(style="white", context="paper")
+    sns.set_theme(style="white", context="talk")
 
-    fig, axes = plt.subplots(
-        nrows=3,
-        ncols=1,
-        figsize=(5.5, 10.5)
-    )
+
+    plt.rcParams.update({
+        "font.size": 18,
+        "axes.labelsize": 18,
+        "axes.titlesize": 18,
+        "xtick.labelsize": 16,
+        "ytick.labelsize": 18,
+        "legend.fontsize": 18,
+    })
+
+    if poster:
+        fig, axes = plt.subplots(
+            nrows=1,
+            ncols=2,
+            figsize=(15, 5)
+        )
+    else:
+        fig, axes = plt.subplots(
+            nrows=3,
+            ncols=1,
+            figsize=(5.5, 10.5)
+        )
 
     def draw(ax, y_col, ylabel, label, log=False):
         # =========================
@@ -271,40 +298,58 @@ def make_plot(df, outdir):
             -0.18, 1.05,
             label,
             transform=ax.transAxes,
-            fontsize=14,
+            fontsize=20,
             fontweight="bold"
         )
 
         sns.despine(ax=ax)
 
-    # Panel A
-    draw(
-        axes[0],
-        "bact_genomad_length_num",
-        "Prophage length (bp)",
-        "A",
-        log=True
-    )
+    if poster:
+        draw(
+            axes[0],
+            "completeness",
+            "CheckV completeness (%)",
+            "A",
+            log=False
+        )
 
-    # Panel B
-    draw(
-        axes[1],
-        "bact_prophage_ratio_num",
-        "Prophage / host ratio",
-        "B",
-        log=False
-    )
+        axes[0].set_ylim(-3, 103)
 
-    # Panel C
-    draw(
-        axes[2],
-        "completeness",
-        "Completeness (%)",
-        "C",
-        log=False
-    )
+        draw(
+            axes[1],
+            "bact_prophage_ratio_num",
+            "Prophage / contig length ratio",
+            "B",
+            log=False
+        )
 
-    axes[2].set_ylim(-3, 103)
+
+    else:
+        draw(
+            axes[0],
+            "bact_genomad_length_num",
+            "Prophage length (bp)",
+            "A",
+            log=True
+        )
+
+        draw(
+            axes[1],
+            "bact_prophage_ratio_num",
+            "Prophage / contig length ratio",
+            "B",
+            log=False
+        )
+
+        draw(
+            axes[2],
+            "completeness",
+            "CheckV completeness (%)",
+            "C",
+            log=False
+        )
+
+        axes[2].set_ylim(-3, 103)
 
     legend_elements = [
         Patch(facecolor=palette["integrated"], edgecolor="black", label="Integrated"),
@@ -331,18 +376,30 @@ def make_plot(df, outdir):
         )
     ]
 
-    axes[0].legend(
-        handles=legend_elements,
-        frameon=False,
-        loc="best"
-    )
+    if poster:
+        axes[1].legend(
+            handles=legend_elements,
+            frameon=False,
+            loc="lower left",
+            bbox_to_anchor=(1.02, 0.0),
+            borderaxespad=0.
+        )
+    else:
+        axes[0].legend(
+            handles=legend_elements,
+            frameon=False,
+            loc="best"
+        )
 
-    plt.tight_layout()
+    if poster:
+        plt.tight_layout(rect=[0, 0, 0.86, 1])
+    else:
+        plt.tight_layout()
 
     png = outdir / "integration_boxplots.png"
     svg = outdir / "integration_boxplots.svg"
 
-    plt.savefig(png, dpi=300, bbox_inches="tight")
+    plt.savefig(png, dpi=600, bbox_inches="tight")
     plt.savefig(svg, bbox_inches="tight")
     plt.close()
 
@@ -359,6 +416,19 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_csv(args.annotation_table, sep="\t")
+
+    # Optionally exclude selected prophages
+    if args.prophages_to_exclude:
+        with open(args.prophages_to_exclude) as f:
+            excluded = {line.strip() for line in f if line.strip()}
+
+        n_before = len(df)
+        df = df[~df["checkv_id"].isin(excluded)].copy()
+
+        print(
+            f"Excluded {n_before - len(df)} prophages "
+            f"listed in {args.prophages_to_exclude}"
+        )
 
     # Filter
     df = df[df["integration_status"].isin(["integrated", "non_integrated"])].copy()
@@ -426,7 +496,7 @@ def main():
     # =========================
     # Plot
     # =========================
-    png, svg = make_plot(df, outdir)
+    png, svg = make_plot(df, outdir, poster=args.poster)
 
     print(f"Figure saved: {png}")
     print(f"Figure saved: {svg}")

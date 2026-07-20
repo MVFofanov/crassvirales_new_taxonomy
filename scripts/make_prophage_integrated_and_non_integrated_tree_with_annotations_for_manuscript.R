@@ -13,8 +13,13 @@ library(ggnewscale)
 # Main working directory
 #WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/mafft_iqtree_TerL_analysis_reference_best_TerLs_without_KC821624_1_100418/iqtree_trees"
 # WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/tree_plots_for_manuscript"
-WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/tree_plots_for_manuscript/MRCA_Crassvirales_iqtree_trees"
 # WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/tree_plots_for_manuscript/MRCA_integrated_prophage_candidates_iqtree_trees"
+
+#WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/tree_plots_for_manuscript/MRCA_Crassvirales_iqtree_trees"
+
+WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/tree_plots_for_manuscript/MRCA_integrated_prophage_candidates_iqtree_trees"
+
+# WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/integrase_tree_analysis/integrase_all_trees"
 
 DATA_DIR <- file.path(WD, "data")
 
@@ -31,14 +36,21 @@ CANDIDATE_LIST_FILE <- file.path(DATA_DIR, "Crassvirales_integrated_prophage_can
 # TREE_FILES <- c(
 #   file.path(DATA_DIR, "TerL_gappy0.7.treefile")
 # )
+# 
+# TREE_FILES <- c(
+#   file.path(DATA_DIR, "TerL_gappy0.7.treefile"),
+#   file.path(DATA_DIR, "TerL_gappy0.8.treefile"),
+#   file.path(DATA_DIR, "TerL_gappy0.9.treefile"),
+#   file.path(DATA_DIR, "TerL_kpic.treefile"),
+#   file.path(DATA_DIR, "TerL_smart-gap.treefile"),
+#   file.path(DATA_DIR, "TerL_untrimmed.treefile")
+# )
 
 TREE_FILES <- c(
-  file.path(DATA_DIR, "TerL_gappy0.7.treefile"),
-  file.path(DATA_DIR, "TerL_gappy0.8.treefile"),
-  file.path(DATA_DIR, "TerL_gappy0.9.treefile"),
-  file.path(DATA_DIR, "TerL_kpic.treefile"),
-  file.path(DATA_DIR, "TerL_smart-gap.treefile"),
-  file.path(DATA_DIR, "TerL_untrimmed.treefile")
+  file.path(DATA_DIR, "integrase_gappy0.8.treefile"),
+  file.path(DATA_DIR, "integrase_kpic.treefile"),
+  file.path(DATA_DIR, "integrase_smart-gap.treefile"),
+  file.path(DATA_DIR, "integrase_untrimmed.treefile")
 )
 
 

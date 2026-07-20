@@ -39,11 +39,13 @@ LINK_LINEWIDTH <- 0.22 #0.25
 GENE_OUTLINE <- 0.15 #0.20
 
 WIDTH  <- 18
-HEIGTH <- 28   # was 24
+HEIGTH <- 32   # was 24
 
 PANEL_TEXT_SIZE <- 5.5 #2.8      # for geom_text labels (ggplot size units)
 AXIS_TEXT_SIZE  <- 14       # for theme text (pt)
-TITLE_TEXT_SIZE <- 14       # panel title
+TITLE_TEXT_SIZE <- 20       # panel title
+
+SHOW_COORDINATES <- FALSE
 
 
 # FUNC_COLORS <- c(
@@ -59,34 +61,34 @@ TITLE_TEXT_SIZE <- 14       # panel title
 #   "unknown" = "#AAAAAA"
 # )
 
-PHYLUM_COLORS <- c(
-  "Bacteroidota":   "#1B9E77",  # green
-  "Bacillota":      "#7570B3",  # purple-blue
-  "Pseudomonadota": "#D95F02",  # orange
-  "Actinomycetota": "#E7298A",  # magenta
-  "Bacteria":       "#666666",  # dark grey
-  "Other":          "#BDBDBD",  # light grey
-)
-
-CLASS_COLORS <- c(
-  # Bacteroidota — green/teal shades
-  "Bacteroidia":    "#006D2C",  # dark green
-  "Flavobacteriia": "#31A354",  # medium green
-  "Cytophagia":     "#74C476",  # light green
-  "Saprospiria":    "#238B8D",  # teal
-  "Chitinophagia":  "#00441B",  # very dark green
-  
-  # Bacillota — purple/blue shades
-  "Clostridia":     "#54278F",  # dark purple
-  
-  # Pseudomonadota — orange/red shades
-  "Alphaproteobacteria": "#D95F02",  # orange
-  "Gammaproteobacteria": "#E6550D",  # red-orange
-  "Betaproteobacteria":  "#Fdae6b",  # light orange
-  
-  # fallback
-  "Other": "#BDBDBD",
-)
+# PHYLUM_COLORS <- c(
+#   "Bacteroidota"   = "#1B9E77",
+#   "Bacillota"      = "#7570B3",
+#   "Pseudomonadota" = "#D95F02",
+#   "Actinomycetota" = "#E7298A",
+#   "Bacteria"       = "#666666",
+#   "Other"          = "#BDBDBD"
+# )
+# 
+# CLASS_COLORS <- c(
+#   # Bacteroidota — green/teal shades
+#   "Bacteroidia":    "#006D2C",  # dark green
+#   "Flavobacteriia": "#31A354",  # medium green
+#   "Cytophagia":     "#74C476",  # light green
+#   "Saprospiria":    "#238B8D",  # teal
+#   "Chitinophagia":  "#00441B",  # very dark green
+#   
+#   # Bacillota — purple/blue shades
+#   "Clostridia":     "#54278F",  # dark purple
+#   
+#   # Pseudomonadota — orange/red shades
+#   "Alphaproteobacteria": "#D95F02",  # orange
+#   "Gammaproteobacteria": "#E6550D",  # red-orange
+#   "Betaproteobacteria":  "#Fdae6b",  # light orange
+#   
+#   # fallback
+#   "Other": "#BDBDBD",
+# )
 
 FUNC_COLORS <- c(
   "Terminase large subunit" = "#d73027",
@@ -121,11 +123,19 @@ GENE_LABEL_LEGEND <- tibble::tribble(
     )
   )
 
-gene_legend_grob <- cowplot::ggdraw() +
-  cowplot::draw_label(
-    "t = Terminase large subunit    i = Integrase   + = Transposase    p = DNA polymerase    h = DNA helicase    * = tRNA",
-    x = 0, hjust = 0, size = 16
+source_symbol <- function(x) {
+  case_when(
+    str_to_lower(as.character(x)) == "mag" ~ "\u25A1",      # □ white square
+    str_to_lower(as.character(x)) == "isolate" ~ "\u25A0",  # ■ black square
+    TRUE ~ ""
   )
+}
+
+# gene_legend_grob <- cowplot::ggdraw() +
+#   cowplot::draw_label(
+#     "t = Terminase large subunit    i = Integrase   + = Transposase    p = DNA polymerase    h = DNA helicase    * = tRNA",
+#     x = 0, hjust = 0, size = 16
+#   )
 
 # ------------------ READ INPUTS ------------------
 
@@ -368,6 +378,33 @@ calc_crop_from_links <- function(links_pb, pad = 2000) {
   )
 }
 
+calc_crop_from_prophage_box <- function(bacterial_id, virus_sum_tbl, flank = 50000) {
+  bacterial_acc <- seqid_to_accession(bacterial_id)
+  
+  box <- virus_sum_tbl %>%
+    filter(fragment_id == bacterial_acc | fragment_id == bacterial_id) %>%
+    slice(1)
+  
+  if (nrow(box) == 0) {
+    warning("No prophage box found for bacterial_id: ", bacterial_id,
+            " or accession: ", bacterial_acc)
+    return(NULL)
+  }
+  
+  box_min <- as.integer(box$box_min[[1]])
+  box_max <- as.integer(box$box_max[[1]])
+  
+  if (is.na(box_min) || is.na(box_max)) {
+    warning("Prophage box has NA coordinates for bacterial_id: ", bacterial_id)
+    return(NULL)
+  }
+  
+  tibble(
+    crop_start = max(1L, box_min - flank),
+    crop_end   = box_max + flank
+  )
+}
+
 extract_gene_labels <- function(genes_df) {
   genes_df %>%
     mutate(
@@ -511,19 +548,12 @@ map_to_panel_title <- function(accession, short_ids_tbl) {
     filter(bact_accession == accession) %>%
     slice(1)
   
-  if (nrow(hit) == 0) {
-    return(accession)
-  }
+  if (nrow(hit) == 0) return(accession)
   
-  short_id <- hit$short_id[1]
   bact_seq_name <- hit$bact_seq_name[1]
   
-  if (!is.na(short_id) && short_id != "") {
-    if (!is.na(bact_seq_name) && bact_seq_name != "") {
-      return(paste0(short_id, "    ", bact_seq_name))
-    } else {
-      return(short_id)
-    }
+  if (!is.na(bact_seq_name) && bact_seq_name != "") {
+    return(bact_seq_name)
   }
   
   accession
@@ -531,6 +561,48 @@ map_to_panel_title <- function(accession, short_ids_tbl) {
 
 fmt_bp <- function(x) {
   format(as.integer(round(x)), big.mark = ",", scientific = FALSE, trim = TRUE)
+}
+
+tax_class_genus <- function(tax) {
+  if (is.na(tax) || tax == "") {
+    return(tibble(class = NA_character_, genus = NA_character_))
+  }
+  
+  parts <- str_split(tax, "\\s*;\\s*")[[1]]
+  parts <- parts[parts != ""]
+  
+  tibble(
+    class = if (length(parts) >= 4) parts[[4]] else NA_character_,
+    genus = if (length(parts) >= 8) parts[[8]] else NA_character_
+  )
+}
+
+format_title_taxonomy <- function(top_tax, bottom_tax) {
+  top_label <- tax_last2_skip23(top_tax)
+  bottom_label <- tax_last2_skip23(bottom_tax)
+  
+  if (is.na(top_label) || top_label == "" ||
+      is.na(bottom_label) || bottom_label == "") {
+    return("")
+  }
+  
+  if (top_label == bottom_label) {
+    return(top_label)
+  }
+  
+  top_parts <- str_split(top_label, "\\s*;\\s*")[[1]]
+  bottom_parts <- str_split(bottom_label, "\\s*;\\s*")[[1]]
+  
+  top_class <- top_parts[1]
+  top_genus <- top_parts[2]
+  bottom_class <- bottom_parts[1]
+  bottom_genus <- bottom_parts[2]
+  
+  if (top_class == bottom_class) {
+    return(paste0(top_class, "; ", top_genus, " / ", bottom_genus))
+  }
+  
+  paste0(top_label, " / ", bottom_label)
 }
 
 
@@ -555,7 +627,10 @@ make_pair_plot <- function(prophage_id, bacterial_id,
   links_pb <- make_links_schema(blast_df, prophage_id, bacterial_id, min_align_len, min_pid)
   
   # --- crop window from plotted links (bacterial coords are start2/end2) ---
-  crop_win <- calc_crop_from_links(links_pb, pad = crop_pad)
+  crop_win <- calc_crop_from_links(
+    links_pb,
+    pad = crop_pad
+  )
   
   trna_pair <- crop_shift_trna(trna_df, prophage_id, bacterial_id, crop_win)
   
@@ -583,12 +658,16 @@ make_pair_plot <- function(prophage_id, bacterial_id,
       } else .
     } %>%
     mutate(
-      start = if_else(is_bacterial & !is.null(crop_win),
-                      gene_min - crop_win$crop_start + 1L,
-                      gene_min),
-      end   = if_else(is_bacterial & !is.null(crop_win),
-                      gene_max - crop_win$crop_start + 1L,
-                      gene_max),
+      start = if (!is.null(crop_win)) {
+        if_else(is_bacterial, gene_min - crop_win$crop_start + 1L, gene_min)
+      } else {
+        gene_min
+      },
+      end = if (!is.null(crop_win)) {
+        if_else(is_bacterial, gene_max - crop_win$crop_start + 1L, gene_max)
+      } else {
+        gene_max
+      },
       gene_fill_group = assign_gene_color_group(product, func)
     ) %>%
     transmute(
@@ -607,7 +686,13 @@ make_pair_plot <- function(prophage_id, bacterial_id,
   # --- shift bacterial link coordinates to the cropped system ---
   if (!is.null(crop_win) && nrow(links_pb) > 0) {
     links_pb <- links_pb %>%
+      filter(
+        pmax(start2, end2) >= crop_win$crop_start,
+        pmin(start2, end2) <= crop_win$crop_end
+      ) %>%
       mutate(
+        start2 = pmax(start2, crop_win$crop_start),
+        end2   = pmin(end2, crop_win$crop_end),
         start2 = as.integer(start2 - crop_win$crop_start + 1L),
         end2   = as.integer(end2   - crop_win$crop_start + 1L)
       )
@@ -624,6 +709,17 @@ make_pair_plot <- function(prophage_id, bacterial_id,
   
   # map to panel title
   title_txt <- map_to_panel_title(title_acc, short_ids)
+  
+  title_txt <- title_txt
+  
+  # title_tax <- format_title_taxonomy(
+  #   top_tax = prophage_taxonomy,
+  #   bottom_tax = bacterial_taxonomy
+  # )
+  # 
+  # if (!is.na(title_tax) && title_tax != "") {
+  #   title_txt <- paste(title_txt, title_tax, sep = "    ")
+  # }
   
   # --- seqs: enforce bacterial length to crop window length ---
   seqs <- genes %>%
@@ -645,70 +741,75 @@ make_pair_plot <- function(prophage_id, bacterial_id,
   p <- gggenomes(seqs = seqs, genes = genes, links = links) +
     geom_seq(linewidth = SEQ_LINEWIDTH)
   
-  seq_y <- p %>% pull_seqs() %>% distinct(seq_id, y)
-  
-  top_y <- max(seq_y$y)
-  off_edge <- 0.55
-  
-  edge_df <- seqs %>%
-    select(seq_id, length) %>%
-    left_join(seq_y, by = "seq_id") %>%
-    mutate(
-      is_top = (y == top_y),
-      y_lab = if_else(is_top, y + off_edge, y - off_edge),
-      vjust = if_else(is_top, 1, 0),
-      
-      left_x = 1,
-      right_x = length,
-      
-      left_lab = case_when(
-        seq_id == bacterial_id & !is.null(crop_win) ~ fmt_bp(crop_win$crop_start),
-        TRUE ~ fmt_bp(1)
-      ),
-      right_lab = case_when(
-        seq_id == bacterial_id & !is.null(crop_win) ~ fmt_bp(crop_win$crop_end),
-        TRUE ~ fmt_bp(length)
+  if (SHOW_COORDINATES) {
+    
+    seq_y <- p %>% pull_seqs() %>% distinct(seq_id, y)
+    
+    top_y <- max(seq_y$y)
+    off_edge <- 0.55
+    
+    edge_df <- seqs %>%
+      select(seq_id, length) %>%
+      left_join(seq_y, by = "seq_id") %>%
+      mutate(
+        is_top = (y == top_y),
+        y_lab = if_else(is_top, y + off_edge, y - off_edge),
+        vjust = if_else(is_top, 1, 0),
+        
+        left_x = 1,
+        right_x = length,
+        
+        left_lab = if (!is.null(crop_win)) {
+          if_else(seq_id == bacterial_id, fmt_bp(crop_win$crop_start[[1]]), fmt_bp(1))
+        } else {
+          fmt_bp(1)
+        },
+        right_lab = if (!is.null(crop_win)) {
+          if_else(seq_id == bacterial_id, fmt_bp(crop_win$crop_end[[1]]), fmt_bp(length))
+        } else {
+          fmt_bp(length)
+        }
       )
-    )
-  
-  p <- p +
-    geom_text(
-      data = edge_df,
-      aes(x = left_x, y = y_lab, label = left_lab, vjust = vjust),
-      inherit.aes = FALSE,
-      hjust = 0,
-      size = PANEL_TEXT_SIZE
-    ) +
-    geom_text(
-      data = edge_df,
-      aes(x = right_x, y = y_lab, label = right_lab, vjust = vjust),
-      inherit.aes = FALSE,
-      hjust = 1,
-      size = PANEL_TEXT_SIZE
-    )
-  
-  edge_ticks <- edge_df %>%
-    transmute(
-      seq_id,
-      x_left = 1,
-      x_right = length,
-      y0 = y - 0.18,
-      y1 = y + 0.18
-    )
-  
-  p <- p +
-    geom_segment(
-      data = edge_ticks,
-      aes(x = x_left, xend = x_left, y = y0, yend = y1),
-      inherit.aes = FALSE,
-      linewidth = 0.4
-    ) +
-    geom_segment(
-      data = edge_ticks,
-      aes(x = x_right, xend = x_right, y = y0, yend = y1),
-      inherit.aes = FALSE,
-      linewidth = 0.4
-    )
+    
+    p <- p +
+      geom_text(
+        data = edge_df,
+        aes(x = left_x, y = y_lab, label = left_lab, vjust = vjust),
+        inherit.aes = FALSE,
+        hjust = 0,
+        size = PANEL_TEXT_SIZE
+      ) +
+      geom_text(
+        data = edge_df,
+        aes(x = right_x, y = y_lab, label = right_lab, vjust = vjust),
+        inherit.aes = FALSE,
+        hjust = 1,
+        size = PANEL_TEXT_SIZE
+      )
+    
+    edge_ticks <- edge_df %>%
+      transmute(
+        seq_id,
+        x_left = 1,
+        x_right = length,
+        y0 = y - 0.18,
+        y1 = y + 0.18
+      )
+    
+    p <- p +
+      geom_segment(
+        data = edge_ticks,
+        aes(x = x_left, xend = x_left, y = y0, yend = y1),
+        inherit.aes = FALSE,
+        linewidth = 0.4
+      ) +
+      geom_segment(
+        data = edge_ticks,
+        aes(x = x_right, xend = x_right, y = y0, yend = y1),
+        inherit.aes = FALSE,
+        linewidth = 0.4
+      )
+  }
   
   # p <- p +
   #   geom_seq_label(
@@ -785,68 +886,69 @@ make_pair_plot <- function(prophage_id, bacterial_id,
   seq_y <- p %>% pull_seqs() %>% distinct(seq_id, y)
   
   top_y <- max(seq_y$y)   # in gggenomes, this is often the TOP track visually
-  off   <- 2 #0.65
+  off   <- 0.2 #0.65
   
   label_df <- seq_y %>%
     mutate(
       label = seqid_to_accession(seq_id),
       is_top = (y == top_y),
-      y_lab  = if_else(is_top, y + off, y - off),
-      vjust  = if_else(is_top, 1, 0)
-    )
-  
-  p <- p +
-    geom_text(
-      data = label_df,
-      aes(x = 1, y = y_lab, label = label, vjust = vjust),
-      inherit.aes = FALSE,
-      size = PANEL_TEXT_SIZE,
-      hjust = 0
-    )
-  
-  # --- right-side taxonomy labels INSIDE panel (aligned + right-justified) ---
-  seq_y <- p %>% pull_seqs() %>% distinct(seq_id, y)
-  top_y <- max(seq_y$y)
-  off   <- 2
-  
-  x_max <- max(
-    seqs$length,
-    genes$end,
-    if (nrow(links) > 0) max(c(links$end, links$end2), na.rm = TRUE) else 0,
-    na.rm = TRUE
-  )
-  
-  x_anchor <- x_max * 0.98   # <-- inside the panel (tune 0.95–0.99)
-  
-  tax_df <- seq_y %>%
-    mutate(
-      tax = case_when(
-        seq_id == prophage_id  ~ tax_last2_skip23(prophage_taxonomy),
-        seq_id == bacterial_id ~ tax_last2_skip23(bacterial_taxonomy),
-        TRUE ~ NA_character_
-      ),
-      is_top = (y == top_y),
-      y_lab  = if_else(is_top, y + off, y - off),
-      vjust  = if_else(is_top, 1, 0),
-      x_lab  = x_anchor
+      y_lab  = y - off,
+      vjust  = 0
     ) %>%
-    filter(!is.na(tax), tax != "")
+    filter(!is_top)
   
-  p <- p +
-    geom_text(
-      data = tax_df,
-      aes(x = x_lab, y = y_lab, label = tax, vjust = vjust),
-      inherit.aes = FALSE,
-      size = PANEL_TEXT_SIZE,
-      hjust = 1
-    )
+  # p <- p +
+  #   geom_text(
+  #     data = label_df,
+  #     aes(x = 1, y = y_lab, label = label, vjust = vjust),
+  #     inherit.aes = FALSE,
+  #     size = PANEL_TEXT_SIZE,
+  #     hjust = 0
+  #   )
+  
+  # # --- right-side taxonomy labels INSIDE panel (aligned + right-justified) ---
+  # seq_y <- p %>% pull_seqs() %>% distinct(seq_id, y)
+  # top_y <- max(seq_y$y)
+  # off   <- 2
+  # 
+  # x_max <- max(
+  #   seqs$length,
+  #   genes$end,
+  #   if (nrow(links) > 0) max(c(links$end, links$end2), na.rm = TRUE) else 0,
+  #   na.rm = TRUE
+  # )
+  # 
+  # x_anchor <- x_max * 0.98   # <-- inside the panel (tune 0.95–0.99)
+  # 
+  # tax_df <- seq_y %>%
+  #   mutate(
+  #     tax = case_when(
+  #       seq_id == prophage_id  ~ tax_last2_skip23(prophage_taxonomy),
+  #       seq_id == bacterial_id ~ tax_last2_skip23(bacterial_taxonomy),
+  #       TRUE ~ NA_character_
+  #     ),
+  #     is_top = (y == top_y),
+  #     y_lab  = if_else(is_top, y + off, y - off),
+  #     vjust  = if_else(is_top, 1, 0),
+  #     x_lab  = x_anchor
+  #   ) %>%
+  #   filter(!is.na(tax), tax != "")
+  
+  # p <- p +
+  #   geom_text(
+  #     data = tax_df,
+  #     aes(x = x_lab, y = y_lab, label = tax, vjust = vjust),
+  #     inherit.aes = FALSE,
+  #     size = PANEL_TEXT_SIZE,
+  #     hjust = 1
+  #   )
   
   # --- mid-panel MAG/isolate labels (centered) ---
+  
   seq_y <- p %>% pull_seqs() %>% distinct(seq_id, y)
   top_y <- max(seq_y$y)
   off   <- 2
   
-  # use same x_max you already compute for taxonomy
   x_max <- max(
     seqs$length,
     genes$end,
@@ -854,40 +956,53 @@ make_pair_plot <- function(prophage_id, bacterial_id,
     na.rm = TRUE
   )
   
-  x_mid <- x_max * 0.50  # center of the panel (tune if you want)
+  x_mid <- x_max * 0.50
   
-  mag_df <- seq_y %>%
-    mutate(
-      mag = case_when(
-        seq_id == prophage_id  ~ as.character(prophage_is_mag),
-        seq_id == bacterial_id ~ as.character(bacterial_is_mag),
-        TRUE ~ NA_character_
-      ),
-      mag = if_else(is.na(mag) | mag == "", NA_character_, mag),
-      is_top = (y == top_y),
-      y_lab  = if_else(is_top, y + off, y - off),
-      vjust  = if_else(is_top, 1, 0),
-      x_lab  = x_mid
-    ) %>%
-    filter(!is.na(mag))
+  source_txt <- paste0(
+    as.character(prophage_is_mag),
+    " / ",
+    as.character(bacterial_is_mag)
+  )
   
-  if (nrow(mag_df) > 0) {
-    p <- p +
-      geom_text(
-        data = mag_df,
-        aes(x = x_lab, y = y_lab, label = mag, vjust = vjust),
-        inherit.aes = FALSE,
-        size = PANEL_TEXT_SIZE,
-        hjust = 0.5,
-        fontface = "bold"
-      )
-  }
+  # combined_tax_label <- paste(
+  #   seqid_to_accession(bacterial_id),
+  #   source_txt,
+  #   format_title_taxonomy(
+  #     top_tax = prophage_taxonomy,
+  #     bottom_tax = bacterial_taxonomy
+  #   )
+  # )
+  # 
+  # tax_bottom_df <- seq_y %>%
+  #   mutate(
+  #     tax = case_when(
+  #       seq_id == bacterial_id ~ combined_tax_label,
+  #       TRUE ~ NA_character_
+  #     ),
+  #     is_top = (y == top_y),
+  #     y_lab  = y - off,
+  #     vjust  = 0,
+  #     x_lab  = x_mid
+  #   ) %>%
+  #   filter(!is.na(tax), tax != "")
+  # 
+  # if (nrow(tax_bottom_df) > 0) {
+  #   p <- p +
+  #     geom_text(
+  #       data = tax_bottom_df,
+  #       aes(x = x_lab, y = y_lab, label = tax, vjust = vjust),
+  #       inherit.aes = FALSE,
+  #       size = PANEL_TEXT_SIZE,
+  #       hjust = 0.5,
+  #       fontface = "bold"
+  #     )
+  # }
   
   # genes
   p <- p +
     geom_gene(aes(fill = gene_fill_group),
               position = "strand",
-              size = 2.2,
+              size = 10, # 2.2
               stroke = GENE_OUTLINE,
               colour = "black") +
     scale_fill_manual(
@@ -900,7 +1015,8 @@ make_pair_plot <- function(prophage_id, bacterial_id,
          y = NULL) +
     theme_bw(base_size = 10) +
     theme(
-      plot.title = element_text(size = TITLE_TEXT_SIZE, face = "bold"),
+      plot.title = element_text(size = TITLE_TEXT_SIZE, face = "bold", 
+                                margin = margin(b = 2)),
       panel.grid = element_blank(),
       
       # remove axis titles
@@ -918,6 +1034,7 @@ make_pair_plot <- function(prophage_id, bacterial_id,
       # optional: remove axis lines too
       # axis.line = element_blank()
     ) +
+    # scale_y_continuous(expand = expansion(mult = c(0.02, 0.02))) +
     coord_cartesian(clip = "off")
   
   # # --- Gene label legend (no colors; just a key with letters) ---
@@ -1087,28 +1204,26 @@ legend_g <- cowplot::get_legend(
   plots[[1]] +
     theme(
       legend.position = "bottom",
-      legend.box = "vertical",
-      
-      # --- text sizes ---
+      legend.box = "horizontal",
       legend.title = element_text(size = 18, face = "bold"),
       legend.text  = element_text(size = 16),
-      
-      # --- make the colored boxes bigger ---
       legend.key.size = unit(6, "mm"),
-      
-      # optional: more spacing
-      legend.spacing.x = unit(4, "mm"),
-      legend.spacing.y = unit(2, "mm")
+      legend.spacing.x = unit(8, "mm")
     ) +
     guides(
-      # optional: bigger colorbar
+      fill = guide_legend(
+        title = "Gene class",
+        nrow = 2,
+        byrow = TRUE,
+        order = 1
+      ),
       color = guide_colorbar(
+        title = "BLAST pident (%)",
         barheight = unit(5, "mm"),
         barwidth  = unit(60, "mm"),
-        title.position = "top"
-      ),
-      # optional: arrange PHOLD categories into multiple rows
-      fill = guide_legend(nrow = 2, byrow = TRUE)
+        title.position = "top",
+        order = 2
+      )
     )
 )
 
@@ -1147,3 +1262,109 @@ ggsave(
 
 message("Saved: ", OUT_PNG)
 #message("Saved: ", OUT_PDF)
+
+
+POSTER_PROPHAGE_IDS <- c(
+  "NZ_OZ245719.1_3456868-3729269",
+  "NZ_JBNZAP010000001.1_808180-1097094"
+)
+
+OUT_POSTER_PNG <- file.path(WD, "prophage_vs_bacterial_two_selected_A0.png")
+OUT_POSTER_SVG <- file.path(WD, "prophage_vs_bacterial_two_selected_A0.svg")
+OUT_POSTER_PDF <- file.path(WD, "prophage_vs_bacterial_two_selected_A0.pdf")
+
+pairs_poster <- pairs %>%
+  filter(prophage_fragment_id %in% POSTER_PROPHAGE_IDS)
+
+pairs_poster %>%
+  select(prophage_fragment_id, bacterial_fragment_id)
+
+stopifnot(nrow(pairs_poster) == length(POSTER_PROPHAGE_IDS))
+
+plots_poster <- purrr::pmap(
+  list(
+    pairs_poster$prophage_fragment_id,
+    pairs_poster$bacterial_fragment_id,
+    pairs_poster$prophage_taxonomy,
+    pairs_poster$bacterial_taxonomy,
+    pairs_poster$prophage_is_mag,
+    pairs_poster$bacterial_is_mag
+  ),
+  function(proph, bact, proph_tax, bact_tax, proph_mag, bact_mag) {
+    make_pair_plot(
+      prophage_id  = proph,
+      bacterial_id = bact,
+      phold_df = phold,
+      blast_df = blast,
+      virus_sum_tbl = virus_sum,
+      trna_df = trna,
+      tax_tbl = tax_tbl,
+      prophage_taxonomy = proph_tax,
+      bacterial_taxonomy = bact_tax,
+      prophage_is_mag = proph_mag,
+      bacterial_is_mag = bact_mag,
+      title_txt = proph,
+      min_align_len = MIN_ALIGN_LEN,
+      min_pid = MIN_PID,
+      show_self_links = SHOW_SELF_LINKS,
+      color_links_by_pid = COLOR_LINKS_BY_PID,
+      func_colors = FUNC_COLORS,
+      short_ids = short_ids
+    )
+  }
+)
+
+legend_poster <- cowplot::get_legend(
+  plots_poster[[1]] +
+    theme(
+      legend.position = "bottom",
+      legend.box = "vertical",
+      legend.title = element_text(size = 24, face = "bold"),
+      legend.text  = element_text(size = 22),
+      legend.key.size = unit(8, "mm")
+    ) +
+    guides(
+      color = guide_colorbar(
+        barheight = unit(6, "mm"),
+        barwidth  = unit(90, "mm"),
+        title.position = "top"
+      ),
+      fill = guide_legend(nrow = 2, byrow = TRUE)
+    )
+)
+
+plots_poster_nolegend <- purrr::map(
+  plots_poster,
+  ~ .x + theme(legend.position = "none")
+)
+
+main_grid_poster <- cowplot::plot_grid(
+  plotlist = plots_poster_nolegend,
+  ncol = 1,
+  align = "v"
+)
+
+final_poster <- cowplot::plot_grid(
+  main_grid_poster,
+  ncol = 1
+)
+
+WIDTH = 30
+HEIGHT = 8
+
+ggsave(OUT_POSTER_PNG, final_poster, width = WIDTH, height = HEIGHT, dpi = 900)
+
+ggsave(
+  filename = OUT_POSTER_SVG,
+  plot = final_poster,
+  width = WIDTH,
+  height = HEIGHT,
+  device = svglite::svglite,
+  bg = "white"
+)
+
+ggsave(OUT_POSTER_PDF, final_poster, width = WIDTH, height = HEIGHT, device = pdf)
+
+message("Saved poster plot: ", OUT_POSTER_PNG)
+message("Saved poster plot: ", OUT_POSTER_SVG)
+message("Saved poster plot: ", OUT_POSTER_PDF)
