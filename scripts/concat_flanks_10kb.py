@@ -2,135 +2,358 @@
 # -*- coding: utf-8 -*-
 
 """
-Concatenate 10kb flanking .fna fragments (left + right) for each prophage directory
-into a single FASTA file saved inside that directory as:
-{prophage_name}_flanking_10kb_all_{N}.fna
+Concatenate flanking FASTA fragments for each prophage directory.
 
-Directory layout (example):
-root/
-  DASYBV010000020.1&provirus_269058_362578/
-    DASYBV010000020.1&provirus_269058_362578_flanking_10kb_left_169058_179057.fna
-    DASYBV010000020.1&provirus_269058_362578_flanking_10kb_left_179058_189057.fna
-    ...
-    DASYBV010000020.1&provirus_269058_362578_flanking_10kb_right_362579_372578.fna
-    ...
+For every prophage, create:
 
-Result:
-  DASYBV010000020.1&provirus_269058_362578_flanking_10kb_all_{N}.fna
+1. All left and right fragments:
+   {prophage_name}_flanking_{size_kb}kb_all_{N}.fna
+
+2. Left fragments only:
+   {prophage_name}_flanking_{size_kb}kb_left_{N}.fna
+
+3. Right fragments only:
+   {prophage_name}_flanking_{size_kb}kb_right_{N}.fna
+
+By default, output files are written inside each prophage directory.
+Use --outdir to collect all output files in one directory.
 """
 
 from __future__ import annotations
+
 import argparse
 import logging
 import re
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
-# Match files like:
+
+FlankFile = Tuple[str, int, int, Path]
+
+
+# Match:
 # {prophage_name}_flanking_10kb_{left|right}_{start}_{end}.fna
 FNAME_RE = re.compile(
-    r"^(?P<name>.+?)_flanking_(?P<size>\d+)kb_(?P<side>left|right)_(?P<start>\d+)_(?P<end>\d+)\.fna$"
+    r"^(?P<name>.+?)"
+    r"_flanking_(?P<size>\d+)kb"
+    r"_(?P<side>left|right)"
+    r"_(?P<start>\d+)"
+    r"_(?P<end>\d+)"
+    r"\.fna$"
 )
 
+
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Concatenate 10kb flanking .fna files (left+right) per prophage directory."
+    parser = argparse.ArgumentParser(
+        description=(
+            "Concatenate flanking FASTA files per prophage directory, "
+            "creating combined, left-only, and right-only multi-FASTA files."
+        )
     )
-    p.add_argument("--root", type=Path, required=True,
-                   help="Root directory that contains prophage subdirectories.")
-    p.add_argument("--size_kb", type=int, default=10,
-                   help="Flank size in kb to include (default: 10).")
-    p.add_argument("--dry_run", action="store_true",
-                   help="Show what would be done without writing files.")
-    p.add_argument("--overwrite", action="store_true",
-                   help="Overwrite existing combined file if present.")
-    p.add_argument("--verbose", "-v", action="count", default=0,
-                   help="Increase log verbosity (-v, -vv).")
-    return p.parse_args()
+
+    parser.add_argument(
+        "--root",
+        type=Path,
+        required=True,
+        help="Root directory containing prophage subdirectories.",
+    )
+
+    parser.add_argument(
+        "--outdir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory for combined FASTA files. "
+            "Default: write inside each prophage directory."
+        ),
+    )
+
+    parser.add_argument(
+        "--size_kb",
+        type=int,
+        default=10,
+        help="Flank fragment size in kb to include (default: 10).",
+    )
+
+    parser.add_argument(
+        "--dry_run",
+        action="store_true",
+        help="Show what would be written without creating files.",
+    )
+
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing output files.",
+    )
+
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="count",
+        default=0,
+        help="Increase log verbosity: -v for INFO, -vv for DEBUG.",
+    )
+
+    return parser.parse_args()
+
 
 def iter_prophage_dirs(root: Path) -> Iterable[Path]:
-    for p in sorted(root.iterdir()):
-        if p.is_dir():
-            yield p
+    """Yield immediate subdirectories of the root directory."""
 
-def collect_flank_files(prophage_dir: Path, size_kb: int) -> List[Tuple[str, int, int, Path]]:
+    for path in sorted(root.iterdir()):
+        if path.is_dir():
+            yield path
+
+
+def collect_flank_files(
+    prophage_dir: Path,
+    size_kb: int,
+) -> List[FlankFile]:
     """
-    Returns list of tuples: (side, start, end, path)
-    Only files matching the given flank size (kb) are included.
+    Collect flank files matching the requested fragment size.
+
+    Returns tuples containing:
+
+        side, start, end, path
     """
-    out: List[Tuple[str, int, int, Path]] = []
-    for f in prophage_dir.glob("*.fna"):
-        m = FNAME_RE.match(f.name)
-        if not m:
+
+    files: List[FlankFile] = []
+
+    for path in prophage_dir.glob("*.fna"):
+        match = FNAME_RE.match(path.name)
+
+        if match is None:
             continue
-        if int(m.group("size")) != size_kb:
+
+        if int(match.group("size")) != size_kb:
             continue
-        side = m.group("side")  # "left" or "right"
-        start = int(m.group("start"))
-        end = int(m.group("end"))
-        out.append((side, start, end, f))
-    # Sort deterministically: left first by start, then right by start
-    # (Change order if you prefer right-first)
-    out.sort(key=lambda x: (0 if x[0] == "left" else 1, x[1], x[2], x[3].name))
-    return out
+
+        side = match.group("side")
+        start = int(match.group("start"))
+        end = int(match.group("end"))
+
+        files.append((side, start, end, path))
+
+    # Genomic coordinate order:
+    # left fragments first, then right fragments.
+    files.sort(
+        key=lambda item: (
+            0 if item[0] == "left" else 1,
+            item[1],
+            item[2],
+            item[3].name,
+        )
+    )
+
+    return files
+
 
 def read_file_text(path: Path) -> str:
-    txt = path.read_text(encoding="utf-8", errors="replace")
-    # Ensure trailing newline for clean concatenation
-    if not txt.endswith("\n"):
-        txt += "\n"
-    return txt
+    """Read a FASTA file and ensure that it ends with a newline."""
+
+    text = path.read_text(encoding="utf-8", errors="replace")
+
+    if not text.endswith("\n"):
+        text += "\n"
+
+    return text
+
+
+def write_combined_fasta(
+    files: List[FlankFile],
+    output_path: Path,
+    overwrite: bool,
+    dry_run: bool,
+    label: str,
+) -> bool:
+    """
+    Concatenate FASTA records and write them to one multi-FASTA file.
+
+    Returns True when the file was written or would be written in dry-run mode.
+    Returns False when an existing file was skipped.
+    """
+
+    if output_path.exists() and not overwrite:
+        logging.info(
+            "Skipping existing %s file: %s",
+            label,
+            output_path,
+        )
+        return False
+
+    for side, start, end, path in files:
+        logging.debug(
+            "Adding to %s: %s (%s:%d-%d)",
+            label,
+            path.name,
+            side,
+            start,
+            end,
+        )
+
+    combined = "".join(read_file_text(path) for _, _, _, path in files)
+
+    if dry_run:
+        logging.info(
+            "[DRY RUN] Would write %s using %d fragments: %s",
+            label,
+            len(files),
+            output_path,
+        )
+    else:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(combined, encoding="utf-8")
+
+        logging.info(
+            "Wrote %s using %d fragments: %s",
+            label,
+            len(files),
+            output_path,
+        )
+
+    return True
+
 
 def main() -> None:
     args = parse_args()
+
     log_level = logging.WARNING
+
     if args.verbose == 1:
         log_level = logging.INFO
     elif args.verbose >= 2:
         log_level = logging.DEBUG
-    logging.basicConfig(format="%(levelname)s: %(message)s", level=log_level)
+
+    logging.basicConfig(
+        format="%(levelname)s: %(message)s",
+        level=log_level,
+    )
 
     root: Path = args.root
-    if not root.exists():
-        logging.error("Root directory does not exist: %s", root)
-        return
 
-    size_kb = args.size_kb
+    if not root.is_dir():
+        raise NotADirectoryError(
+            f"Root directory does not exist or is not a directory: {root}"
+        )
+
+    if args.size_kb <= 0:
+        raise ValueError("--size_kb must be greater than zero.")
+
+    if args.outdir is not None and not args.dry_run:
+        args.outdir.mkdir(parents=True, exist_ok=True)
 
     processed = 0
+    outputs_written = 0
+
     for prophage_dir in iter_prophage_dirs(root):
-        prophage_name = prophage_dir.name  # e.g., DASYBV010000020.1&provirus_269058_362578
-        files = collect_flank_files(prophage_dir, size_kb=size_kb)
+        prophage_name = prophage_dir.name
+
+        files = collect_flank_files(
+            prophage_dir,
+            size_kb=args.size_kb,
+        )
+
         if not files:
-            logging.info("No %dkb flanks in %s", size_kb, prophage_dir)
+            logging.info(
+                "No %d kb flank files found in %s",
+                args.size_kb,
+                prophage_dir,
+            )
             continue
 
-        # Build output file name with count
-        n = len(files)
-        out_name = f"{prophage_name}_flanking_{size_kb}kb_all_{n}.fna"
-        out_path = prophage_dir / out_name
+        left_files = [
+            item for item in files
+            if item[0] == "left"
+        ]
 
-        if out_path.exists() and not args.overwrite:
-            logging.info("Skip existing (use --overwrite to replace): %s", out_path)
-            processed += 1
-            continue
+        right_files = [
+            item for item in files
+            if item[0] == "right"
+        ]
 
-        # Prepare concatenated content
-        parts: List[str] = []
-        for side, start, end, f in files:
-            logging.debug("Adding %s (%s:%d-%d)", f.name, side, start, end)
-            parts.append(read_file_text(f))
-        combined = "".join(parts)
+        output_directory = (
+            args.outdir
+            if args.outdir is not None
+            else prophage_dir
+        )
 
-        if args.dry_run:
-            logging.info("[DRY RUN] Would write %s (%d files)", out_path, n)
+        output_jobs = [
+            (
+                "all flanks",
+                files,
+                output_directory
+                / (
+                    f"{prophage_name}_flanking_"
+                    f"{args.size_kb}kb_all_{len(files)}.fna"
+                ),
+            )
+        ]
+
+        if left_files:
+            output_jobs.append(
+                (
+                    "left flanks",
+                    left_files,
+                    output_directory
+                    / (
+                        f"{prophage_name}_flanking_"
+                        f"{args.size_kb}kb_left_{len(left_files)}.fna"
+                    ),
+                )
+            )
         else:
-            out_path.write_text(combined, encoding="utf-8")
-            logging.info("Wrote %s (%d files)", out_path, n)
+            logging.warning(
+                "No left flank fragments found for %s",
+                prophage_name,
+            )
+
+        if right_files:
+            output_jobs.append(
+                (
+                    "right flanks",
+                    right_files,
+                    output_directory
+                    / (
+                        f"{prophage_name}_flanking_"
+                        f"{args.size_kb}kb_right_{len(right_files)}.fna"
+                    ),
+                )
+            )
+        else:
+            logging.warning(
+                "No right flank fragments found for %s",
+                prophage_name,
+            )
+
+        for label, selected_files, output_path in output_jobs:
+            written = write_combined_fasta(
+                files=selected_files,
+                output_path=output_path,
+                overwrite=args.overwrite,
+                dry_run=args.dry_run,
+                label=label,
+            )
+
+            if written:
+                outputs_written += 1
+
+        logging.info(
+            "Processed %s: %d left, %d right, %d total fragments.",
+            prophage_name,
+            len(left_files),
+            len(right_files),
+            len(files),
+        )
 
         processed += 1
 
-    logging.info("Done. Processed %d prophage directories.", processed)
+    logging.warning(
+        "Done. Processed %d prophage directories; created or planned %d output files.",
+        processed,
+        outputs_written,
+    )
+
 
 if __name__ == "__main__":
     main()
