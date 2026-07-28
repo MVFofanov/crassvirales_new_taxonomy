@@ -11,31 +11,33 @@ suppressPackageStartupMessages({
 # SETTINGS
 # ============================================================
 
-WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/integrated_prophages/bacterial_flank_analysis/genomic_maps_for_manuscript/data"
+WD <- "C:/crassvirales/crassvirales_new_taxonomy/crassvirales_prophages/integrated_prophages/bacterial_flank_analysis/genomic_maps_for_manuscript"
 
-PAIRS_TSV <- file.path(WD, "pairs_prophage_with_flanks_vs_bacterial_reoriented.tsv")
-BLAST_TSV <- file.path(WD, "all_blastn_all_vs_all.tsv")
-PHOLD_TSV <- file.path(WD, "all_phold_per_cds_predictions.tsv")
+INPUT_DIR  <- file.path(WD, "data")
+OUTPUT_DIR <- file.path(WD, "figures")
 
-FIG_DIR <- file.path(WD, "figures")
-dir.create(FIG_DIR, showWarnings = FALSE, recursive = TRUE)
+dir.create(OUTPUT_DIR, showWarnings = FALSE, recursive = TRUE)
 
-OUT_PNG <- file.path(FIG_DIR, "representative_prophage_vs_bacterial_maps.png")
-OUT_SVG <- file.path(FIG_DIR, "representative_prophage_vs_bacterial_maps.svg")
-OUT_PDF <- file.path(FIG_DIR, "representative_prophage_vs_bacterial_maps.pdf")
+PAIRS_TSV <- file.path(INPUT_DIR, "pairs_prophage_with_flanks_vs_bacterial_reoriented.tsv")
+BLAST_TSV <- file.path(INPUT_DIR, "all_blastn_all_vs_all.tsv")
+PHOLD_TSV <- file.path(INPUT_DIR, "all_phold_per_cds_predictions.tsv")
+
+OUT_PNG <- file.path(OUTPUT_DIR, "representative_prophage_vs_bacterial_maps.png")
+OUT_SVG <- file.path(OUTPUT_DIR, "representative_prophage_vs_bacterial_maps.svg")
+OUT_PDF <- file.path(OUTPUT_DIR, "representative_prophage_vs_bacterial_maps.pdf")
 
 OUT_PROPHAGE_ONLY_PNG <- file.path(
-  FIG_DIR,
+  OUTPUT_DIR,
   "representative_prophage_only_maps.png"
 )
 
 OUT_PROPHAGE_ONLY_SVG <- file.path(
-  FIG_DIR,
+  OUTPUT_DIR,
   "representative_prophage_only_maps.svg"
 )
 
 OUT_PROPHAGE_ONLY_PDF <- file.path(
-  FIG_DIR,
+  OUTPUT_DIR,
   "representative_prophage_only_maps.pdf"
 )
 
@@ -621,7 +623,8 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
   # READ INPUTS
   # ============================================================
   
-  pairs <- read_tsv(PAIRS_TSV, show_col_types = FALSE)
+  pairs <- read_tsv(PAIRS_TSV, show_col_types = FALSE) %>%
+    mutate(.input_order = row_number())
   
   required_pairs_columns <- c(
     "prophage_id",
@@ -637,7 +640,6 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
   validate_columns(pairs, required_pairs_columns, "PAIRS_TSV")
   
   representatives <- pairs %>%
-    mutate(.input_order = row_number()) %>%
     filter(is_yes(representative)) %>%
     arrange(.input_order)
   
@@ -910,25 +912,43 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
     limitsize = FALSE
   )
 
-  # Save one prophage-only figure per requested group. The panels are selected
-  # from the already-built representative plots, preserving the input order and
-  # all settings used for the combined prophage-only figure.
+  # Save one prophage-only figure per requested group. Unlike the combined
+  # figure above, each group figure contains all group members, irrespective of
+  # the value in the representative column.
   group_output_paths <- list()
 
   for (group_name in PROPHAGE_ONLY_GROUPS) {
-    group_indices <- which(representatives$group == group_name)
+    group_rows <- pairs %>%
+      filter(group == group_name) %>%
+      arrange(.input_order)
 
-    if (length(group_indices) == 0) {
+    if (nrow(group_rows) == 0) {
       warning(
-        "No representative prophages found for group: ",
+        "No prophages found for group: ",
         group_name,
         ". No group-specific figure was saved."
       )
       next
     }
 
+    message(
+      "Building group-specific prophage-only figure for ",
+      group_name,
+      " (", nrow(group_rows), " prophages)"
+    )
+
+    group_plots <- map(
+      seq_len(nrow(group_rows)),
+      function(i) {
+        make_prophage_only_panel(
+          row_info = group_rows[i, ],
+          phold_df = phold
+        )
+      }
+    )
+
     group_grid <- cowplot::plot_grid(
-      plotlist = prophage_only_plots[group_indices],
+      plotlist = group_plots,
       ncol = N_COL,
       align = "v"
     )
@@ -942,11 +962,11 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
 
     group_output_height <-
       PROPHAGE_ONLY_PANEL_HEIGHT *
-      ceiling(length(group_indices) / N_COL) +
+      ceiling(length(group_plots) / N_COL) +
       1.5
 
     group_file_stem <- file.path(
-      FIG_DIR,
+      OUTPUT_DIR,
       paste0("representative_prophage_only_", group_name, "_maps")
     )
 
