@@ -21,6 +21,7 @@ dir.create(OUTPUT_DIR, showWarnings = FALSE, recursive = TRUE)
 PAIRS_TSV <- file.path(INPUT_DIR, "pairs_prophage_with_flanks_vs_bacterial_reoriented.tsv")
 BLAST_TSV <- file.path(INPUT_DIR, "all_blastn_all_vs_all.tsv")
 PHOLD_TSV <- file.path(INPUT_DIR, "all_phold_per_cds_predictions.tsv")
+TRNA_GFF <- file.path(INPUT_DIR, "all_trnascan_out.gff")
 
 OUT_PNG <- file.path(OUTPUT_DIR, "representative_prophage_vs_bacterial_maps.png")
 OUT_SVG <- file.path(OUTPUT_DIR, "representative_prophage_vs_bacterial_maps.svg")
@@ -73,22 +74,45 @@ TITLE_TEXT_SIZE <- 16
 SEQ_LINEWIDTH <- 0.35
 LINK_LINEWIDTH <- 0.22
 GENE_OUTLINE <- 0.15
+TRNA_MARKER_SIZE <- 5
+TRNA_MARKER_COLOR <- "#000000"
+TRNA_MARKER_Y_OFFSET <- 0.34
+PROPHAGE_COORD_Y_OFFSET <- 0.40
 
 # Highlight color for the prophage region on the top track
 PROPHAGE_BOX_FILL <- "#ff7f00"
   PROPHAGE_BOX_ALPHA <- 0.18
   PROPHAGE_BOX_LINEWIDTH <- 0.7
   
-  FUNC_COLORS <- c(
-    "Terminase large subunit" = "#d73027",
-    "Integrase"               = "#4575b4",
+  PRODUCT_COLORS <- c(
+    "terminase large subunit" = "#ff0000", # "#8ccfb3", "#ff0000" # "#d73027",
+    "major head protein"      = "#0000ff", # "#0000ff", "#e7298a",
+    "portal protein"          = "#22b2cc",
+    "tail sheath stabilizer"  = "#8d89b9",
     "DNA polymerase"          = "#1a9850",
     "DNA helicase"            = "#984ea3",
-    "Transposase"             = "#ff7f00",
-    "Major head protein"      = "#e7298a",
-    "Hypothetical protein"    = "#D3D3D3",
-    "Other annotated"         = "#4D4D4D"
+    "integrase"               = "#5E00D6", #"#ff99ff", # "#4575b4",
+    "transposase"             = "#ff7f00",
+    "excisionase and transcriptional regulator" = "#8B4513",
+    "DNA transposition protein" = "#C49A00",
+    "hypothetical protein"    = "#FFFFFF"
   )
+
+  FUNCTION_COLORS <- c(
+    "connector" = "#5A5A5A",
+    "DNA, RNA and nucleotide metabolism" = "#f000ff",
+    "head and packaging" = "#ff008d",
+    "integration and excision" = "#E0B0FF",
+    "lysis" = "#4deeea", #"#003F5C",
+    "moron, auxiliary metabolic gene and host takeover" = "#D3D3D3", ##8900ff",
+    "other" = "#D3D3D3",
+    "tail" = "#74ee15",
+    "transcription regulation" = "#ffe700",
+    "unknown" = "#FFFFFF",
+    "unknown function" = "#FFFFFF"
+  )
+
+  GENE_COLORS <- c(PRODUCT_COLORS, FUNCTION_COLORS)
   
   # ============================================================
   # HELPERS
@@ -111,20 +135,35 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
     product <- replace_na(as.character(product), "")
     func <- replace_na(as.character(func), "")
     
-    product_lc <- str_to_lower(product)
-    func_lc <- str_to_lower(func)
+    product_lc <- str_to_lower(str_squish(product))
+    func_lc <- str_to_lower(str_squish(func))
+
+    function_labels <- set_names(
+      names(FUNCTION_COLORS),
+      str_to_lower(names(FUNCTION_COLORS))
+    )
+    function_group <- unname(function_labels[func_lc])
     
     case_when(
-      str_detect(product_lc, "terminase large subunit") ~ "Terminase large subunit",
-      str_detect(product_lc, "\\bintegrase\\b") ~ "Integrase",
+      str_detect(product_lc, "terminase large subunit") ~ "terminase large subunit",
+      str_detect(product_lc, "\\bintegrase\\b") ~ "integrase",
       str_detect(product_lc, "dna polymerase") ~ "DNA polymerase",
       str_detect(product_lc, "dna helicase") ~ "DNA helicase",
-      str_detect(product_lc, "transposase") ~ "Transposase",
-      str_detect(product_lc, "major head protein") ~ "Major head protein",
-      product_lc == "hypothetical protein" |
-        func_lc == "unknown" |
-        func_lc == "unknown function" ~ "Hypothetical protein",
-      TRUE ~ "Other annotated"
+      str_detect(product_lc, "transposase") ~ "transposase",
+      str_detect(product_lc, "major head protein") ~ "major head protein",
+      str_detect(product_lc, "portal protein") ~ "portal protein",
+      str_detect(product_lc, "tail sheath stabilizer") ~ "tail sheath stabilizer",
+      str_detect(
+        product_lc,
+        "excisionase and transcriptional regulator"
+      ) ~ "excisionase and transcriptional regulator",
+      str_detect(
+        product_lc,
+        "dna transposition protein"
+      ) ~ "DNA transposition protein",
+      product_lc == "hypothetical protein" ~ "hypothetical protein",
+      !is.na(function_group) ~ function_group,
+      TRUE ~ "other"
     )
   }
   
@@ -162,6 +201,19 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
         product = as.character(product),
         func = as.character(func),
         gene_fill_group
+      )
+  }
+
+  crop_and_shift_trnas <- function(trna_df, seq_id, crop_start, crop_end) {
+    trna_df %>%
+      filter(
+        contig_id == seq_id,
+        position >= crop_start,
+        position <= crop_end
+      ) %>%
+      transmute(
+        seq_id = contig_id,
+        position = as.integer(position - crop_start + 1L)
       )
   }
   
@@ -317,7 +369,7 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       )
   }
   
-  make_one_panel <- function(row_info, phold_df, blast_df) {
+  make_one_panel <- function(row_info, phold_df, trna_df, blast_df) {
     top_id <- row_info$prophage_nucleotide_id_to_use[[1]]
     bottom_id <- row_info$bacterial_to_use[[1]]
     
@@ -386,6 +438,20 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
     }
 
     genes <- bind_rows(top_genes, bottom_genes)
+
+    top_trnas <- crop_and_shift_trnas(
+      trna_df, top_id, top_crop_start, top_crop_end
+    )
+
+    bottom_trnas <- if (show_bottom_track) {
+      crop_and_shift_trnas(
+        trna_df, bottom_id, bottom_crop_start, bottom_crop_end
+      )
+    } else {
+      top_trnas[0, ]
+    }
+
+    trna_markers <- bind_rows(top_trnas, bottom_trnas)
     
     if (nrow(top_genes) == 0) {
       warning("No PHOLD genes found for top track: ", top_id)
@@ -455,6 +521,16 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
     
     seq_y <- p %>% pull_seqs() %>% distinct(seq_id, y)
     seq_y <- seq_y %>% ungroup()
+
+    trna_markers <- trna_markers %>%
+      left_join(seq_y, by = "seq_id") %>%
+      mutate(
+        marker_y = if_else(
+          seq_id == top_id,
+          y + TRNA_MARKER_Y_OFFSET,
+          y - TRNA_MARKER_Y_OFFSET
+        )
+      )
     
     top_box <- top_box %>%
       left_join(seq_y, by = "seq_id") %>%
@@ -462,6 +538,23 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
         ymin = y - 0.32,
         ymax = y + 0.32
       )
+
+    prophage_box_coord_labels <- bind_rows(
+      top_box %>%
+        transmute(
+          x = box_start,
+          y_lab = y + PROPHAGE_COORD_Y_OFFSET,
+          label = fmt_bp(prophage_min),
+          hjust = 0
+        ),
+      top_box %>%
+        transmute(
+          x = box_end,
+          y_lab = y + PROPHAGE_COORD_Y_OFFSET,
+          label = fmt_bp(prophage_max),
+          hjust = 1
+        )
+    )
     
     p <- p +
       geom_rect(
@@ -477,6 +570,13 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
         color = PROPHAGE_BOX_FILL,
         alpha = PROPHAGE_BOX_ALPHA,
         linewidth = PROPHAGE_BOX_LINEWIDTH
+      ) +
+      geom_text(
+        data = prophage_box_coord_labels,
+        aes(x = x, y = y_lab, label = label, hjust = hjust),
+        inherit.aes = FALSE,
+        vjust = 1,
+        size = PANEL_TEXT_SIZE
       )
     
     if (nrow(links) > 0) {
@@ -502,10 +602,24 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
         colour = "black"
       ) +
       scale_fill_manual(
-        values = FUNC_COLORS,
+        values = GENE_COLORS,
         drop = FALSE,
         name = "Gene class"
       )
+
+    if (nrow(trna_markers) > 0) {
+      p <- p +
+        geom_text(
+          data = trna_markers,
+          aes(x = position, y = marker_y),
+          label = "*",
+          inherit.aes = FALSE,
+          size = TRNA_MARKER_SIZE,
+          color = TRNA_MARKER_COLOR,
+          fontface = "bold",
+          vjust = 0.5
+        )
+    }
     
     # Track labels
     seq_labels <- seq_y %>%
@@ -590,7 +704,7 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       )
   }
   
-  make_prophage_only_panel <- function(row_info, phold_df) {
+  make_prophage_only_panel <- function(row_info, phold_df, trna_df) {
     top_id <- row_info$prophage_nucleotide_id_to_use[[1]]
     
     top_length <- as.integer(
@@ -622,6 +736,13 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
     
     top_genes <- crop_and_shift_genes(
       phold_df = phold_df,
+      seq_id = top_id,
+      crop_start = top_crop_start,
+      crop_end = top_crop_end
+    )
+
+    top_trnas <- crop_and_shift_trnas(
+      trna_df = trna_df,
       seq_id = top_id,
       crop_start = top_crop_start,
       crop_end = top_crop_end
@@ -663,6 +784,10 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       pull_seqs() %>%
       distinct(seq_id, y) %>%
       ungroup()
+
+    trna_markers <- top_trnas %>%
+      left_join(seq_y, by = "seq_id") %>%
+      mutate(marker_y = y + TRNA_MARKER_Y_OFFSET)
     
     top_box <- top_box %>%
       left_join(seq_y, by = "seq_id") %>%
@@ -670,6 +795,23 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
         ymin = y - 0.32,
         ymax = y + 0.32
       )
+
+    prophage_box_coord_labels <- bind_rows(
+      top_box %>%
+        transmute(
+          x = box_start,
+          y_lab = y + PROPHAGE_COORD_Y_OFFSET,
+          label = fmt_bp(prophage_min),
+          hjust = 0
+        ),
+      top_box %>%
+        transmute(
+          x = box_end,
+          y_lab = y + PROPHAGE_COORD_Y_OFFSET,
+          label = fmt_bp(prophage_max),
+          hjust = 1
+        )
+    )
     
     p <- p +
       geom_rect(
@@ -686,6 +828,13 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
         alpha = PROPHAGE_BOX_ALPHA,
         linewidth = PROPHAGE_BOX_LINEWIDTH
       ) +
+      geom_text(
+        data = prophage_box_coord_labels,
+        aes(x = x, y = y_lab, label = label, hjust = hjust),
+        inherit.aes = FALSE,
+        vjust = 1,
+        size = PANEL_TEXT_SIZE
+      ) +
       geom_gene(
         aes(fill = gene_fill_group),
         position = "strand",
@@ -694,10 +843,24 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
         colour = "black"
       ) +
       scale_fill_manual(
-        values = FUNC_COLORS,
+        values = GENE_COLORS,
         drop = FALSE,
         name = "Gene class"
       )
+
+    if (nrow(trna_markers) > 0) {
+      p <- p +
+        geom_text(
+          data = trna_markers,
+          aes(x = position, y = marker_y),
+          label = "*",
+          inherit.aes = FALSE,
+          size = TRNA_MARKER_SIZE,
+          color = TRNA_MARKER_COLOR,
+          fontface = "bold",
+          vjust = 0.5
+        )
+    }
     
     track_label <- seq_y %>%
       mutate(
@@ -840,6 +1003,32 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
     "contig_id", "start", "end", "strand", "product", "function"
   )
   validate_columns(phold, required_phold_columns, "PHOLD_TSV")
+
+  trnas <- read_tsv(
+    TRNA_GFF,
+    comment = "#",
+    col_names = c(
+      "contig_id",
+      "source",
+      "feature_type",
+      "start",
+      "end",
+      "score",
+      "strand",
+      "phase",
+      "attributes"
+    ),
+    col_types = cols(.default = col_character()),
+    progress = FALSE
+  ) %>%
+    filter(feature_type == "tRNA") %>%
+    transmute(
+      contig_id = as.character(contig_id),
+      position = as.integer(start)
+    ) %>%
+    distinct(contig_id, position)
+
+  message("tRNA features loaded: ", nrow(trnas))
   
   required_blast_columns <- c(
     "pair_id",
@@ -911,6 +1100,7 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       make_one_panel(
         row_info = representatives[i, ],
         phold_df = phold,
+        trna_df = trnas,
         blast_df = blast
       )
     }
@@ -926,7 +1116,8 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       
       make_prophage_only_panel(
         row_info = representatives[i, ],
-        phold_df = phold
+        phold_df = phold,
+        trna_df = trnas
       )
     }
   )
@@ -935,6 +1126,7 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
   legend_source <- make_one_panel(
     row_info = representatives[1, ],
     phold_df = phold,
+    trna_df = trnas,
     blast_df = blast
   ) +
     theme(
@@ -965,7 +1157,8 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
   
   prophage_only_legend_source <- make_prophage_only_panel(
     row_info = representatives[1, ],
-    phold_df = phold
+    phold_df = phold,
+    trna_df = trnas
   ) +
     theme(
       legend.position = "bottom",
@@ -1119,7 +1312,8 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       function(i) {
         make_prophage_only_panel(
           row_info = group_rows[i, ],
-          phold_df = phold
+          phold_df = phold,
+          trna_df = trnas
         )
       }
     )
