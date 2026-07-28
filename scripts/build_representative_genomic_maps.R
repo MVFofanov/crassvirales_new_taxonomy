@@ -51,12 +51,14 @@ PROPHAGE_ONLY_GROUPS <- c(
 
 # Track cropping
 TOP_FLANK_BP <- 100000L
-BOTTOM_FLANK_BP <- 0L
 PROPHAGE_ONLY_FLANK_BP <- 10000L
 
 # BLAST filtering
 MIN_ALIGN_LEN <- 200L
-MIN_PID <- 0
+MIN_PID <- 60
+MAX_CLUSTER_GAP_BP <- 50000L
+MAX_BACTERIAL_SPAN_BP <- 500000L
+BACTERIAL_CONTEXT_BP <- 10000L
 
 # Layout
 N_COL <- 1
@@ -186,6 +188,119 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       ) %>%
       filter(qmax >= top_start, qmin <= top_end)
   }
+
+  select_bacterial_locus <- function(hits, bacterial_length) {
+    if (nrow(hits) == 0) {
+      return(list(
+        hits = hits,
+        crop_start = NA_integer_,
+        crop_end = NA_integer_
+      ))
+    }
+
+    hits <- hits %>%
+      arrange(smin, smax) %>%
+      mutate(hit_row = row_number())
+
+    cluster_id <- integer(nrow(hits))
+    current_cluster <- 0L
+    current_end <- -Inf
+
+    for (i in seq_len(nrow(hits))) {
+      if (i == 1L || hits$smin[[i]] - current_end > MAX_CLUSTER_GAP_BP) {
+        current_cluster <- current_cluster + 1L
+        current_end <- hits$smax[[i]]
+      } else {
+        current_end <- max(current_end, hits$smax[[i]])
+      }
+      cluster_id[[i]] <- current_cluster
+    }
+
+    hits$cluster_id <- cluster_id
+
+    cluster_summary <- hits %>%
+      group_by(cluster_id) %>%
+      summarise(
+        aligned_bp = sum(length, na.rm = TRUE),
+        total_bitscore = sum(bitscore, na.rm = TRUE),
+        cluster_start = min(smin),
+        cluster_end = max(smax),
+        .groups = "drop"
+      ) %>%
+      arrange(
+        desc(aligned_bp),
+        desc(total_bitscore),
+        cluster_start
+      )
+
+    selected_cluster <- cluster_summary$cluster_id[[1]]
+    selected_hits <- hits %>%
+      filter(cluster_id == selected_cluster)
+
+    cluster_start <- min(selected_hits$smin)
+    cluster_end <- max(selected_hits$smax)
+    cluster_span <- cluster_end - cluster_start + 1L
+
+    if (
+      cluster_span + 2L * BACTERIAL_CONTEXT_BP <=
+        MAX_BACTERIAL_SPAN_BP
+    ) {
+      crop_start <- max(1L, cluster_start - BACTERIAL_CONTEXT_BP)
+      crop_end <- min(
+        bacterial_length,
+        cluster_end + BACTERIAL_CONTEXT_BP
+      )
+    } else {
+      # Find the fixed-width window containing the greatest total number of
+      # aligned bacterial bases from the selected cluster.
+      candidate_starts <- unique(c(
+        selected_hits$smin,
+        pmax(
+          1L,
+          selected_hits$smax - MAX_BACTERIAL_SPAN_BP + 1L
+        )
+      ))
+
+      candidate_starts <- pmin(
+        candidate_starts,
+        max(1L, bacterial_length - MAX_BACTERIAL_SPAN_BP + 1L)
+      )
+
+      window_scores <- map_dbl(
+        candidate_starts,
+        function(window_start) {
+          window_end <- min(
+            bacterial_length,
+            window_start + MAX_BACTERIAL_SPAN_BP - 1L
+          )
+          sum(
+            pmax(
+              0,
+              pmin(selected_hits$smax, window_end) -
+                pmax(selected_hits$smin, window_start) + 1
+            )
+          )
+        }
+      )
+
+      crop_start <- as.integer(
+        candidate_starts[[which.max(window_scores)]]
+      )
+      crop_end <- min(
+        bacterial_length,
+        crop_start + MAX_BACTERIAL_SPAN_BP - 1L
+      )
+    }
+
+    selected_hits <- selected_hits %>%
+      filter(smax >= crop_start, smin <= crop_end)
+
+    list(
+      hits = selected_hits,
+      crop_start = as.integer(crop_start),
+      crop_end = as.integer(crop_end)
+    )
+  }
   
   make_coordinate_labels <- function(seq_y, crop_tbl) {
     seq_y %>%
@@ -217,53 +332,99 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
     top_crop_start <- max(1L, prophage_min - TOP_FLANK_BP)
     top_crop_end <- min(top_length, prophage_max + TOP_FLANK_BP)
     
-    pair_links_raw <- prepare_pair_links(
+    all_pair_links_raw <- prepare_pair_links(
       blast_df = blast_df,
       row_info = row_info,
       top_start = top_crop_start,
       top_end = top_crop_end
     )
+
+    selected_locus <- select_bacterial_locus(
+      hits = all_pair_links_raw,
+      bacterial_length = bottom_length
+    )
+
+    pair_links_raw <- selected_locus$hits
     
     if (nrow(pair_links_raw) == 0) {
+      show_bottom_track <- FALSE
       warning(
         "No prophage-to-bacterial BLAST links found for representative: ",
         row_info$prophage_id[[1]],
-        ". The panel will use the full bacterial track."
+        ". The bacterial track will be omitted."
       )
-      bottom_crop_start <- 1L
-      bottom_crop_end <- bottom_length
+      bottom_crop_start <- NA_integer_
+      bottom_crop_end <- NA_integer_
     } else {
-      bottom_crop_start <- max(1L, min(pair_links_raw$smin) - BOTTOM_FLANK_BP)
-      bottom_crop_end <- min(bottom_length, max(pair_links_raw$smax) + BOTTOM_FLANK_BP)
+      show_bottom_track <- TRUE
+      bottom_crop_start <- selected_locus$crop_start
+      bottom_crop_end <- selected_locus$crop_end
+
+      message(
+        "  Selected bacterial locus: ",
+        fmt_bp(bottom_crop_start),
+        "-",
+        fmt_bp(bottom_crop_end),
+        " (",
+        nrow(pair_links_raw),
+        "/",
+        nrow(all_pair_links_raw),
+        " qualifying BLAST hits retained)"
+      )
     }
     
     top_genes <- crop_and_shift_genes(
       phold_df, top_id, top_crop_start, top_crop_end
     )
-    bottom_genes <- crop_and_shift_genes(
-      phold_df, bottom_id, bottom_crop_start, bottom_crop_end
-    )
+
+    bottom_genes <- if (show_bottom_track) {
+      crop_and_shift_genes(
+        phold_df, bottom_id, bottom_crop_start, bottom_crop_end
+      )
+    } else {
+      top_genes[0, ]
+    }
+
     genes <- bind_rows(top_genes, bottom_genes)
     
     if (nrow(top_genes) == 0) {
       warning("No PHOLD genes found for top track: ", top_id)
     }
-    if (nrow(bottom_genes) == 0) {
+    if (show_bottom_track && nrow(bottom_genes) == 0) {
       warning("No PHOLD genes found for bottom track: ", bottom_id)
     }
     
     crop_tbl <- tibble(
-      seq_id = c(top_id, bottom_id),
-      crop_start = c(top_crop_start, bottom_crop_start),
-      crop_end = c(top_crop_end, bottom_crop_end)
-    ) %>%
+      seq_id = top_id,
+      crop_start = top_crop_start,
+      crop_end = top_crop_end
+    )
+
+    if (show_bottom_track) {
+      crop_tbl <- bind_rows(
+        crop_tbl,
+        tibble(
+          seq_id = bottom_id,
+          crop_start = bottom_crop_start,
+          crop_end = bottom_crop_end
+        )
+      )
+    }
+
+    track_levels <- if (show_bottom_track) {
+      c(top_id, bottom_id)
+    } else {
+      top_id
+    }
+
+    crop_tbl <- crop_tbl %>%
       mutate(plot_length = crop_end - crop_start + 1L)
     
     seqs <- crop_tbl %>%
       transmute(
         seq_id,
         length = as.integer(plot_length),
-        bin_id = factor(seq_id, levels = c(top_id, bottom_id))
+        bin_id = factor(seq_id, levels = track_levels)
       ) %>%
       arrange(bin_id)
     
