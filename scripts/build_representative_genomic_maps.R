@@ -454,6 +454,7 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       geom_seq(linewidth = SEQ_LINEWIDTH)
     
     seq_y <- p %>% pull_seqs() %>% distinct(seq_id, y)
+    seq_y <- seq_y %>% ungroup()
     
     top_box <- top_box %>%
       left_join(seq_y, by = "seq_id") %>%
@@ -511,12 +512,20 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       mutate(
         top_y = max(y),
         is_top = y == top_y,
-        label = if_else(
-          is_top,
-          paste0("Prophage-containing contig: ", top_id),
-          paste0("Related bacterial contig: ", bottom_id)
+        label = case_when(
+          seq_id == top_id ~ paste0(
+            "Prophage-containing contig: ",
+            top_id
+          ),
+          seq_id == bottom_id ~ paste0(
+            "Bacterial contig without a prophage: ",
+            bottom_id
+          ),
+          TRUE ~ seq_id
         ),
-        y_lab = if_else(is_top, y + 0.50, y - 0.50),
+        # Anchor the bacterial label just inside the paired panel's lower
+        # border (the visible y-range starts at 0.48).
+        y_lab = if_else(is_top, y + 0.50, 0.53),
         vjust = if_else(is_top, 1, 0)
       )
     
@@ -572,7 +581,13 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
         legend.position = "none",
         plot.margin = margin(4, 4, 4, 4)
       ) +
-      coord_cartesian(clip = "off")
+      # Keep the paired-panel height, but remove excess vertical whitespace.
+      # The limits include both tracks and their names/coordinate labels.
+      coord_cartesian(
+        ylim = c(0.48, 2.52),
+        expand = FALSE,
+        clip = "off"
+      )
   }
   
   make_prophage_only_panel <- function(row_info, phold_df) {
@@ -646,7 +661,8 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
     
     seq_y <- p %>%
       pull_seqs() %>%
-      distinct(seq_id, y)
+      distinct(seq_id, y) %>%
+      ungroup()
     
     top_box <- top_box %>%
       left_join(seq_y, by = "seq_id") %>%
