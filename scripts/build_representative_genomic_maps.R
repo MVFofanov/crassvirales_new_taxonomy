@@ -704,7 +704,12 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       )
   }
   
-  make_prophage_only_panel <- function(row_info, phold_df, trna_df) {
+  make_prophage_only_panel <- function(
+    row_info,
+    phold_df,
+    trna_df,
+    common_x_max = NULL
+  ) {
     top_id <- row_info$prophage_nucleotide_id_to_use[[1]]
     
     top_length <- as.integer(
@@ -953,6 +958,11 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       # Keep the panel height, but use more of it for the single genomic track.
       # The limits include the upper track label and lower coordinate labels.
       coord_cartesian(
+        xlim = if (is.null(common_x_max)) {
+          NULL
+        } else {
+          c(1, common_x_max)
+        },
         ylim = c(0.55, 1.52),
         expand = FALSE,
         clip = "off"
@@ -1307,13 +1317,43 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       " (", nrow(group_rows), " prophages)"
     )
 
+    group_common_x_max <- group_rows %>%
+      transmute(
+        prophage_min = pmin(
+          as.integer(prophage_new_start),
+          as.integer(prophage_new_end)
+        ),
+        prophage_max = pmax(
+          as.integer(prophage_new_start),
+          as.integer(prophage_new_end)
+        ),
+        crop_start = pmax(
+          1L,
+          prophage_min - PROPHAGE_ONLY_FLANK_BP
+        ),
+        crop_end = pmin(
+          as.integer(prophage_nucleotide_length),
+          prophage_max + PROPHAGE_ONLY_FLANK_BP
+        ),
+        plot_length = crop_end - crop_start + 1L
+      ) %>%
+      pull(plot_length) %>%
+      max(na.rm = TRUE)
+
+    message(
+      "  Common horizontal scale: ",
+      fmt_bp(group_common_x_max),
+      " bp"
+    )
+
     group_plots <- map(
       seq_len(nrow(group_rows)),
       function(i) {
         make_prophage_only_panel(
           row_info = group_rows[i, ],
           phold_df = phold,
-          trna_df = trnas
+          trna_df = trnas,
+          common_x_max = group_common_x_max
         )
       }
     )
