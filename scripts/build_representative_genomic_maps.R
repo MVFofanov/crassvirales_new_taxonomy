@@ -51,7 +51,7 @@ PROPHAGE_ONLY_GROUPS <- c(
 )
 
 # Track cropping
-TOP_FLANK_BP <- 100000L
+TOP_FLANK_BP <- 50000L # 100000L
 PROPHAGE_ONLY_FLANK_BP <- 10000L
 
 # BLAST filtering
@@ -78,6 +78,10 @@ TRNA_MARKER_SIZE <- 5
 TRNA_MARKER_COLOR <- "#000000"
 TRNA_MARKER_Y_OFFSET <- 0.34
 PROPHAGE_COORD_Y_OFFSET <- 0.40
+GRID_INTERVAL_BP <- 50000L
+GRID_LINE_COLOR <- "#000000" #"#BDBDBD"
+GRID_LINEWIDTH <- 0.30
+GRID_LINE_ALPHA <- 0.9
 
 # Highlight color for the prophage region on the top track
 PROPHAGE_BOX_FILL <- "#ff7f00"
@@ -130,6 +134,18 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
   is_yes <- function(x) {
     str_to_lower(str_trim(as.character(x))) %in% c("yes", "y", "true", "1")
   }
+
+  make_grid_breaks <- function(x_max) {
+    if (is.na(x_max) || x_max < GRID_INTERVAL_BP) {
+      return(numeric(0))
+    }
+
+    seq(
+      from = GRID_INTERVAL_BP,
+      to = floor(x_max / GRID_INTERVAL_BP) * GRID_INTERVAL_BP,
+      by = GRID_INTERVAL_BP
+    )
+  }
   
   assign_gene_color_group <- function(product, func) {
     product <- replace_na(as.character(product), "")
@@ -159,7 +175,7 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       ) ~ "excisionase and transcriptional regulator",
       str_detect(
         product_lc,
-        "dna transposition protein"
+        "DNA transposition protein"
       ) ~ "DNA transposition protein",
       product_lc == "hypothetical protein" ~ "hypothetical protein",
       !is.na(function_group) ~ function_group,
@@ -369,7 +385,13 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       )
   }
   
-  make_one_panel <- function(row_info, phold_df, trna_df, blast_df) {
+  make_one_panel <- function(
+    row_info,
+    phold_df,
+    trna_df,
+    blast_df,
+    common_x_max = NULL
+  ) {
     top_id <- row_info$prophage_nucleotide_id_to_use[[1]]
     bottom_id <- row_info$bacterial_to_use[[1]]
     
@@ -515,8 +537,21 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       box_start = prophage_min - top_crop_start + 1L,
       box_end = prophage_max - top_crop_start + 1L
     )
+
+    panel_x_max <- if (is.null(common_x_max)) {
+      max(seqs$length)
+    } else {
+      common_x_max
+    }
     
     p <- gggenomes(seqs = seqs, genes = genes, links = links) +
+      geom_vline(
+        xintercept = make_grid_breaks(panel_x_max),
+        color = GRID_LINE_COLOR,
+        linetype = "dashed",
+        linewidth = GRID_LINEWIDTH,
+        alpha = GRID_LINE_ALPHA
+      ) +
       geom_seq(linewidth = SEQ_LINEWIDTH)
     
     seq_y <- p %>% pull_seqs() %>% distinct(seq_id, y)
@@ -698,6 +733,11 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       # Keep the paired-panel height, but remove excess vertical whitespace.
       # The limits include both tracks and their names/coordinate labels.
       coord_cartesian(
+        xlim = if (is.null(common_x_max)) {
+          NULL
+        } else {
+          c(1, common_x_max)
+        },
         ylim = c(0.48, 2.52),
         expand = FALSE,
         clip = "off"
@@ -778,11 +818,24 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       box_start = prophage_min - top_crop_start + 1L,
       box_end = prophage_max - top_crop_start + 1L
     )
+
+    panel_x_max <- if (is.null(common_x_max)) {
+      plot_length
+    } else {
+      common_x_max
+    }
     
     p <- gggenomes(
       seqs = seqs,
       genes = top_genes
     ) +
+      geom_vline(
+        xintercept = make_grid_breaks(panel_x_max),
+        color = GRID_LINE_COLOR,
+        linetype = "dashed",
+        linewidth = GRID_LINEWIDTH,
+        alpha = GRID_LINE_ALPHA
+      ) +
       geom_seq(linewidth = SEQ_LINEWIDTH)
     
     seq_y <- p %>%
@@ -1098,6 +1151,88 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
   # ============================================================
   # BUILD PANELS IN ORIGINAL TABLE ORDER
   # ============================================================
+
+  representative_prophage_common_x_max <- representatives %>%
+    transmute(
+      prophage_min = pmin(
+        as.integer(prophage_new_start),
+        as.integer(prophage_new_end)
+      ),
+      prophage_max = pmax(
+        as.integer(prophage_new_start),
+        as.integer(prophage_new_end)
+      ),
+      crop_start = pmax(
+        1L,
+        prophage_min - PROPHAGE_ONLY_FLANK_BP
+      ),
+      crop_end = pmin(
+        as.integer(prophage_nucleotide_length),
+        prophage_max + PROPHAGE_ONLY_FLANK_BP
+      ),
+      plot_length = crop_end - crop_start + 1L
+    ) %>%
+    pull(plot_length) %>%
+    max(na.rm = TRUE)
+
+  paired_common_x_max <- map_dbl(
+    seq_len(nrow(representatives)),
+    function(i) {
+      row_info <- representatives[i, ]
+      top_length <- as.integer(
+        row_info$prophage_nucleotide_length[[1]]
+      )
+      bottom_length <- as.integer(row_info$bacterial_length[[1]])
+      prophage_min <- min(
+        as.integer(row_info$prophage_new_start[[1]]),
+        as.integer(row_info$prophage_new_end[[1]])
+      )
+      prophage_max <- max(
+        as.integer(row_info$prophage_new_start[[1]]),
+        as.integer(row_info$prophage_new_end[[1]])
+      )
+      top_crop_start <- max(1L, prophage_min - TOP_FLANK_BP)
+      top_crop_end <- min(
+        top_length,
+        prophage_max + TOP_FLANK_BP
+      )
+      top_plot_length <- top_crop_end - top_crop_start + 1L
+
+      qualifying_hits <- prepare_pair_links(
+        blast_df = blast,
+        row_info = row_info,
+        top_start = top_crop_start,
+        top_end = top_crop_end
+      )
+      selected_locus <- select_bacterial_locus(
+        hits = qualifying_hits,
+        bacterial_length = bottom_length
+      )
+
+      if (nrow(selected_locus$hits) == 0) {
+        return(as.numeric(top_plot_length))
+      }
+
+      bottom_plot_length <-
+        selected_locus$crop_end -
+        selected_locus$crop_start +
+        1L
+
+      max(top_plot_length, bottom_plot_length)
+    }
+  ) %>%
+    max(na.rm = TRUE)
+
+  message(
+    "Representative prophage-only common horizontal scale: ",
+    fmt_bp(representative_prophage_common_x_max),
+    " bp"
+  )
+  message(
+    "Paired BLAST-map common horizontal scale: ",
+    fmt_bp(paired_common_x_max),
+    " bp"
+  )
   
   plots <- map(
     seq_len(nrow(representatives)),
@@ -1111,7 +1246,8 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
         row_info = representatives[i, ],
         phold_df = phold,
         trna_df = trnas,
-        blast_df = blast
+        blast_df = blast,
+        common_x_max = paired_common_x_max
       )
     }
   )
@@ -1127,7 +1263,8 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
       make_prophage_only_panel(
         row_info = representatives[i, ],
         phold_df = phold,
-        trna_df = trnas
+        trna_df = trnas,
+        common_x_max = representative_prophage_common_x_max
       )
     }
   )
@@ -1137,7 +1274,8 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
     row_info = representatives[1, ],
     phold_df = phold,
     trna_df = trnas,
-    blast_df = blast
+    blast_df = blast,
+    common_x_max = paired_common_x_max
   ) +
     theme(
       legend.position = "bottom",
@@ -1168,7 +1306,8 @@ PROPHAGE_BOX_FILL <- "#ff7f00"
   prophage_only_legend_source <- make_prophage_only_panel(
     row_info = representatives[1, ],
     phold_df = phold,
-    trna_df = trnas
+    trna_df = trnas,
+    common_x_max = representative_prophage_common_x_max
   ) +
     theme(
       legend.position = "bottom",
